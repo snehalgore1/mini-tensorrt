@@ -42,9 +42,13 @@ add_library(mtrt STATIC
   src/optimizer/const_fold.cpp
   src/profiler/profiler.cpp
   src/frontend/json/json_loader.cpp
-  src/runtime/executor.cpp)
+  src/runtime/executor.cpp
+  backends/cpu/gemm.cpp
+  backends/cpu/thread_pool.cpp)
 
 target_include_directories(mtrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# Repo root so "backends/cpu/..." headers resolve for the lib, tests, benches.
+target_include_directories(mtrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Internal cross-file headers under src/ (e.g. src/ops/kernels.h).
 target_include_directories(mtrt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(mtrt PRIVATE nlohmann_json::nlohmann_json)

@@ -75,20 +75,45 @@ open in chrome://tracing or Perfetto (trace files are gitignored, regenerable).
 
 ## GEMM optimization ladder (Week 5)
 
-Problem size: TBD. Peak theoretical FP32 throughput: TBD GFLOP/s.
+Problem size: **N = 1024** (square, FP32). Measured ceilings on this machine
+(`bench_gemm`): peak 1-core NEON FMA ≈ **98 GFLOP/s**, 8 P-cores ≈ **786 GFLOP/s**,
+triad memory bandwidth ≈ **67 GB/s**. (Peaks vary ±~15% run to run from thermal
+throttling on a fanless-class laptop; values below are one representative run.)
 
-| Step | Description | GFLOP/s | Speedup vs naive | % of peak |
+| Step | Description | GFLOP/s | Speedup vs naive | % of NEON peak |
 |---|---|---|---|---|
-| 0 | Naive triple loop | TBD | 1.00x | TBD |
-| 1 | Loop reorder | TBD | TBD | TBD |
-| 2 | Register blocking | TBD | TBD | TBD |
-| 3 | Cache tiling | TBD | TBD | TBD |
-| 4 | Panel packing | TBD | TBD | TBD |
-| 5 | NEON microkernel | TBD | TBD | TBD |
-| 6 | Multithreaded | TBD | TBD | TBD |
-| ref | Apple Accelerate | TBD | TBD | TBD |
+| 0 | Naive triple loop (ijk) | 1.7 | 1.0x | 2% (1-core) |
+| 1 | Loop reorder (ikj) | 25.8 | 15x | 26% (1-core) |
+| 2 | Register blocking (4x4) | 25.5 | 15x | 26% (1-core) |
+| 3 | Cache tiling (M/N/K) | 26.8 | 16x | 27% (1-core) |
+| 4 | Panel packing | 26.2 | 15x | 27% (1-core) |
+| 5 | NEON microkernel (8x8) | 77.7 | 46x | **79% (1-core)** |
+| 6 | Multithreaded (8 cores) | 310.4 | 183x | **39% (8-core)** |
+| ref | Apple Accelerate (cblas_sgemm) | 2319.4 | 1364x | 295% of 8-core NEON |
 
-Remaining gap to Accelerate, explained: TBD
+**Per-step attribution.** The two dominant wins are (1) **naive → reorder, ~15x**:
+switching `ijk` to `ikj` makes the inner loop unit-stride over B and C, which fixes the
+cache behavior and lets Apple Clang auto-vectorize it. (2) **packed → NEON, ~3x**: an
+explicit 8x8 microkernel (16 `float32x4` accumulators) exposes enough independent FMA
+chains to saturate the four NEON pipes — the compiler's auto-vectorization of the scalar
+loop only reached ~26 GFLOP/s. The scalar register/tiling/packing steps land near the
+auto-vectorized reorder on this compiler; their real payoff shows at **N=2048, where
+register blocking alone collapses to ~10 GFLOP/s (B no longer fits cache) while cache
+tiling holds at ~26** — i.e. tiling earns its keep exactly when the working set stops
+fitting. Threading adds ~4x over single-core NEON (not 8x — see below).
+
+**Remaining gap to Accelerate, explained.** Threaded reaches ~310 GFLOP/s vs Accelerate's
+~2319 — about **13% of Accelerate**. The dominant reason is **AMX**: Accelerate dispatches
+to Apple's on-die matrix coprocessor, which is not a public instruction set and is
+unreachable from portable NEON. Accelerate's 2319 GFLOP/s is **~3x above the entire 8-core
+NEON roofline (786)** — no NEON kernel, however tuned, can match it. Measured against the
+ceiling we *can* target: single-core NEON hits **79% of the 1-core peak** (packing +
+8x8 microkernel are near-optimal for NEON); multicore reaches only 39% of the 8-core peak
+because GEMM at this size becomes **memory-bandwidth-bound** (67 GB/s triad) and the P-cores
+share L2/bandwidth and thermal headroom, so throughput scales ~4x rather than 8x. Secondary
+gaps: no software prefetch, a fixed (untuned) block size, and no packing of the C tile.
+
+Reproduce: `./build/benchmarks/bench_gemm --sizes 256,512,1024,2048 && python python/plot_gemm.py`.
 
 ---
 

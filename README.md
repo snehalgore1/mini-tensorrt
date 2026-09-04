@@ -52,8 +52,26 @@ The MLP executes as `MatMul → Add → Gelu → MatMul → Add → Softmax` on 
 thread. Fusing the first `MatMul → Add → Gelu` chain cuts planned peak
 intermediate memory from 128 B to 80 B (see `docs/RESULTS.md`).
 
-<!-- Week 8: add the GEMM optimization plot and the before/after fusion graph
-     diagram here. -->
+### GEMM optimization ladder
+
+Matrix multiply dominates neural-net runtime, so it is where hand-optimization is
+legitimate. Taking a naive triple loop to a blocked, packed, NEON-vectorized,
+multithreaded kernel (FP32, N=1024, Apple M1 Pro):
+
+![GEMM GFLOP/s ladder](docs/images/gemm_ladder.png)
+
+**~1.7 → 310 GFLOP/s (≈180x)** across the ladder. The roofline shows where each
+version sits against the machine's ceilings:
+
+![Roofline](docs/images/roofline.png)
+
+The single-core NEON kernel reaches **~79% of the 1-core NEON peak**. Apple
+Accelerate is ~7x faster still — because it uses the **AMX matrix coprocessor**,
+which sits *above the entire NEON roofline* and is not reachable from portable
+NEON. Full per-step attribution and the honest gap analysis are in
+[`docs/RESULTS.md`](docs/RESULTS.md).
+
+<!-- Week 8: add the before/after fusion graph diagram here. -->
 
 ## Memory planning
 

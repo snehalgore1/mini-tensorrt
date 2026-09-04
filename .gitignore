@@ -18,8 +18,9 @@ models/*.onnx
 !models/mlp.bin
 !models/transformer.bin
 
-# profiling output
+# profiling / benchmark output (regenerable)
 *.trace.json
+gemm_results.json
 perf.data*
 *.dSYM/
 
