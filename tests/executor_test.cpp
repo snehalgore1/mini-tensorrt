@@ -59,7 +59,7 @@ TEST(Executor, UnregisteredOpThrowsAtSetup) {
   Graph g;
   TensorId in = g.add_tensor(info("in", TensorKind::kInput));
   TensorId out = g.add_tensor(info("out", TensorKind::kOutput));
-  g.add_node(Node{"Gelu", {in}, {out}, {}});
+  g.add_node(Node{"NoSuchOp", {in}, {out}, {}});
   g.mark_input(in);
   g.mark_output(out);
 

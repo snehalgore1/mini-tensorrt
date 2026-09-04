@@ -1,0 +1,185 @@
+{
+  "name": "mlp",
+  "weights_file": "mlp.bin",
+  "tensors": [
+    {
+      "name": "x",
+      "dtype": "f32",
+      "shape": [
+        1,
+        8
+      ],
+      "kind": "input"
+    },
+    {
+      "name": "W0",
+      "dtype": "f32",
+      "shape": [
+        8,
+        16
+      ],
+      "kind": "weight",
+      "offset": 0,
+      "nbytes": 512
+    },
+    {
+      "name": "b0",
+      "dtype": "f32",
+      "shape": [
+        1,
+        16
+      ],
+      "kind": "weight",
+      "offset": 512,
+      "nbytes": 64
+    },
+    {
+      "name": "t0",
+      "dtype": "f32",
+      "shape": [
+        1,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "t1",
+      "dtype": "f32",
+      "shape": [
+        1,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "t2",
+      "dtype": "f32",
+      "shape": [
+        1,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "W1",
+      "dtype": "f32",
+      "shape": [
+        16,
+        4
+      ],
+      "kind": "weight",
+      "offset": 576,
+      "nbytes": 256
+    },
+    {
+      "name": "b1",
+      "dtype": "f32",
+      "shape": [
+        1,
+        4
+      ],
+      "kind": "weight",
+      "offset": 832,
+      "nbytes": 16
+    },
+    {
+      "name": "t3",
+      "dtype": "f32",
+      "shape": [
+        1,
+        4
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "t4",
+      "dtype": "f32",
+      "shape": [
+        1,
+        4
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "out",
+      "dtype": "f32",
+      "shape": [
+        1,
+        4
+      ],
+      "kind": "output"
+    }
+  ],
+  "nodes": [
+    {
+      "op": "MatMul",
+      "inputs": [
+        "x",
+        "W0"
+      ],
+      "outputs": [
+        "t0"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "t0",
+        "b0"
+      ],
+      "outputs": [
+        "t1"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Gelu",
+      "inputs": [
+        "t1"
+      ],
+      "outputs": [
+        "t2"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "t2",
+        "W1"
+      ],
+      "outputs": [
+        "t3"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "t3",
+        "b1"
+      ],
+      "outputs": [
+        "t4"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Softmax",
+      "inputs": [
+        "t4"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attrs": {}
+    }
+  ],
+  "inputs": [
+    "x"
+  ],
+  "outputs": [
+    "out"
+  ]
+}

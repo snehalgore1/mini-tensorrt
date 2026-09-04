@@ -1,6 +1,6 @@
 # Roadmap
 
-**Current week: 1**
+**Current week: 3**
 
 Each week has a hard "definition of done." Do not start the next week until the current
 week's DoD is met and its results are recorded. Weeks 1 through 4 are the core; the

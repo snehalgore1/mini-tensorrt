@@ -1,8 +1,8 @@
 #include <algorithm>
 
-#include "mtrt/registry.h"
 #include "mtrt/support/assert.h"
 #include "mtrt/tensor.h"
+#include "kernels.h"
 
 namespace mtrt {
 namespace {
@@ -45,7 +45,7 @@ void relu_f32(const OpContext& ctx) {
 
 }  // namespace
 
-void register_builtin_kernels(KernelRegistry& registry) {
+void register_elementwise_kernels(KernelRegistry& registry) {
   registry.register_kernel("Add", DType::kF32, &add_f32);
   registry.register_kernel("Relu", DType::kF32, &relu_f32);
 }
