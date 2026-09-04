@@ -37,8 +37,26 @@ ctest --test-dir build --output-on-failure
 
 Full benchmark matrix and per-optimization ablations: `docs/RESULTS.md`.
 
-<!-- Week 8: add the GEMM optimization plot, the flame chart screenshot,
-     and the before/after fusion graph diagram here. -->
+### Per-operator profile
+
+The profiler emits Chrome Trace Event JSON, viewable in
+[Perfetto](https://ui.perfetto.dev) or `chrome://tracing`. Regenerate with
+`./build/benchmarks/bench_model --trace mlp.trace.json`.
+
+![MLP per-operator flame chart](docs/images/flame_chart.png)
+
+The MLP executes as `MatMul → Add → Gelu → MatMul → Add → Softmax` on a single
+thread. Fusing the first `MatMul → Add → Gelu` chain cuts planned peak
+intermediate memory from 128 B to 80 B (see `docs/RESULTS.md`).
+
+<!-- Week 8: add the GEMM optimization plot and the before/after fusion graph
+     diagram here. -->
+
+## Memory planning
+
+Greedy-by-size arena allocation reuses space between tensors whose lifetimes do
+not overlap. On the MLP: **224 B / 5 allocations (naive) → 128 B / 1 allocation
+(planned)**, a 43% reduction. See `docs/RESULTS.md`.
 
 ## Design
 
