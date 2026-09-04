@@ -18,9 +18,16 @@ void validate_node_shapes(const Graph& g, const Node& n) {
     if (n.inputs.size() != 2 || n.outputs.size() != 1) {
       throw GraphError("Add expects 2 inputs and 1 output");
     }
-    if (shape_of(n.inputs[0]) != shape_of(n.inputs[1]) ||
-        shape_of(n.inputs[0]) != shape_of(n.outputs[0])) {
-      throw GraphError("Add requires identical input/output shapes");
+    if (shape_of(n.inputs[0]) != shape_of(n.outputs[0])) {
+      throw GraphError("Add output shape must match the first input");
+    }
+    // Second input is either identical-shape or a last-dim bias broadcast.
+    const auto& a = shape_of(n.inputs[0]);
+    const auto& b = shape_of(n.inputs[1]);
+    int64_t b_numel = 1;
+    for (int64_t d : b) b_numel *= d;
+    if (b != a && !(!a.empty() && b_numel == a.back())) {
+      throw GraphError("Add second input must match shape or broadcast last dim");
     }
   } else if (n.op_type == "Relu") {
     if (n.inputs.size() != 1 || n.outputs.size() != 1) {

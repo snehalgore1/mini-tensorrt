@@ -36,6 +36,7 @@ add_library(mtrt STATIC
   src/ops/kernels_matmul.cpp
   src/ops/kernels_activation.cpp
   src/ops/kernels_fused.cpp
+  src/ops/kernels_transformer.cpp
   src/memory/memory_planner.cpp
   src/optimizer/fusion.cpp
   src/optimizer/const_fold.cpp

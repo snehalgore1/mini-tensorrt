@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "mtrt/node.h"
@@ -14,16 +15,22 @@ using namespace mtrt::testing;
 
 namespace {
 
-void run_kernel(const std::string& op, const std::vector<const Tensor*>& ins,
-                Tensor& out) {
+void run_kernel_attrs(const std::string& op,
+                      const std::vector<const Tensor*>& ins, Tensor& out,
+                      std::unordered_map<std::string, Attribute> attrs) {
   KernelRegistry reg;
   register_builtin_kernels(reg);
   KernelFn fn = reg.lookup(op, DType::kF32);
   ASSERT_NE(fn, nullptr) << "no kernel for " << op;
-  Node node{op, {}, {}, {}};
+  Node node{op, {}, {}, std::move(attrs)};
   std::vector<Tensor*> outs{&out};
   OpContext ctx{ins, outs, node};
   fn(ctx);
+}
+
+void run_kernel(const std::string& op, const std::vector<const Tensor*>& ins,
+                Tensor& out) {
+  run_kernel_attrs(op, ins, out, {});
 }
 
 }  // namespace
@@ -68,4 +75,44 @@ TEST(Golden, Softmax) {
   Tensor out = Tensor::owning(DType::kF32, in.shape());
   run_kernel("Softmax", {&in}, out);
   ExpectGolden(out, exp, kDefaultRtol, 1e-5f);  // Softmax: looser atol per CLAUDE.md
+}
+
+TEST(Golden, LayerNorm) {
+  Tensor x = tensor_from_npy(load_golden("op_layernorm_in"));
+  Tensor gamma = tensor_from_npy(load_golden("op_layernorm_gamma"));
+  Tensor beta = tensor_from_npy(load_golden("op_layernorm_beta"));
+  Tensor out = Tensor::owning(DType::kF32, x.shape());
+  run_kernel_attrs("LayerNorm", {&x, &gamma, &beta}, out,
+                   {{"eps", static_cast<double>(1e-5)}});
+  ExpectGolden(out, load_golden("op_layernorm_out"), kDefaultRtol, 1e-5f);
+}
+
+TEST(Golden, Scale) {
+  Tensor x = tensor_from_npy(load_golden("op_scale_in"));
+  Tensor out = Tensor::owning(DType::kF32, x.shape());
+  run_kernel_attrs("Scale", {&x}, out, {{"scale", 0.25}});
+  ExpectGolden(out, load_golden("op_scale_out"));
+}
+
+TEST(Golden, Reshape) {
+  Tensor x = tensor_from_npy(load_golden("op_reshape_in"));
+  Tensor out = Tensor::owning(DType::kF32, {3, 4});
+  run_kernel("Reshape", {&x}, out);
+  ExpectGolden(out, load_golden("op_reshape_out"));
+}
+
+TEST(Golden, Transpose) {
+  Tensor x = tensor_from_npy(load_golden("op_transpose_in"));  // [2,3,4]
+  Tensor out = Tensor::owning(DType::kF32, {3, 2, 4});
+  run_kernel_attrs("Transpose", {&x}, out,
+                   {{"perm", std::vector<int64_t>{1, 0, 2}}});
+  ExpectGolden(out, load_golden("op_transpose_out"));
+}
+
+TEST(Golden, BatchedMatMul) {
+  Tensor a = tensor_from_npy(load_golden("op_bmm_a"));  // [2,3,4]
+  Tensor b = tensor_from_npy(load_golden("op_bmm_b"));  // [2,4,5]
+  Tensor out = Tensor::owning(DType::kF32, {2, 3, 5});
+  run_kernel("BatchedMatMul", {&a, &b}, out);
+  ExpectGolden(out, load_golden("op_bmm_out"));
 }

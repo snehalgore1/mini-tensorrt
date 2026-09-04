@@ -14,8 +14,9 @@ venv/
 models/*.bin
 models/*.onnx
 !models/goldens/
-# ...except the tiny MLP fixture: committed so the C++ test suite needs no Python (D8)
+# ...except the small model fixtures: committed so the C++ test suite needs no Python (D8)
 !models/mlp.bin
+!models/transformer.bin
 
 # profiling output
 *.trace.json

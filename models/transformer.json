@@ -1,0 +1,732 @@
+{
+  "name": "transformer_block",
+  "weights_file": "transformer.bin",
+  "tensors": [
+    {
+      "name": "x",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "input"
+    },
+    {
+      "name": "ln1_g",
+      "dtype": "f32",
+      "shape": [
+        32
+      ],
+      "kind": "weight",
+      "offset": 0,
+      "nbytes": 128
+    },
+    {
+      "name": "ln1_b",
+      "dtype": "f32",
+      "shape": [
+        32
+      ],
+      "kind": "weight",
+      "offset": 128,
+      "nbytes": 128
+    },
+    {
+      "name": "h",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "Wq",
+      "dtype": "f32",
+      "shape": [
+        32,
+        32
+      ],
+      "kind": "weight",
+      "offset": 256,
+      "nbytes": 4096
+    },
+    {
+      "name": "Wk",
+      "dtype": "f32",
+      "shape": [
+        32,
+        32
+      ],
+      "kind": "weight",
+      "offset": 4352,
+      "nbytes": 4096
+    },
+    {
+      "name": "Wv",
+      "dtype": "f32",
+      "shape": [
+        32,
+        32
+      ],
+      "kind": "weight",
+      "offset": 8448,
+      "nbytes": 4096
+    },
+    {
+      "name": "Wo",
+      "dtype": "f32",
+      "shape": [
+        32,
+        32
+      ],
+      "kind": "weight",
+      "offset": 12544,
+      "nbytes": 4096
+    },
+    {
+      "name": "Q",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "K",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "V",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "Qr",
+      "dtype": "f32",
+      "shape": [
+        8,
+        2,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "Kr",
+      "dtype": "f32",
+      "shape": [
+        8,
+        2,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "Vr",
+      "dtype": "f32",
+      "shape": [
+        8,
+        2,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "Qh",
+      "dtype": "f32",
+      "shape": [
+        2,
+        8,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "Kh",
+      "dtype": "f32",
+      "shape": [
+        2,
+        8,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "Vh",
+      "dtype": "f32",
+      "shape": [
+        2,
+        8,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "KhT",
+      "dtype": "f32",
+      "shape": [
+        2,
+        16,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "scores",
+      "dtype": "f32",
+      "shape": [
+        2,
+        8,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "scaled",
+      "dtype": "f32",
+      "shape": [
+        2,
+        8,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "attn",
+      "dtype": "f32",
+      "shape": [
+        2,
+        8,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "ctx",
+      "dtype": "f32",
+      "shape": [
+        2,
+        8,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "ctxT",
+      "dtype": "f32",
+      "shape": [
+        8,
+        2,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "ctxM",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "ao",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "x1",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "ln2_g",
+      "dtype": "f32",
+      "shape": [
+        32
+      ],
+      "kind": "weight",
+      "offset": 16640,
+      "nbytes": 128
+    },
+    {
+      "name": "ln2_b",
+      "dtype": "f32",
+      "shape": [
+        32
+      ],
+      "kind": "weight",
+      "offset": 16768,
+      "nbytes": 128
+    },
+    {
+      "name": "h2",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "W1",
+      "dtype": "f32",
+      "shape": [
+        32,
+        128
+      ],
+      "kind": "weight",
+      "offset": 16896,
+      "nbytes": 16384
+    },
+    {
+      "name": "b1",
+      "dtype": "f32",
+      "shape": [
+        1,
+        128
+      ],
+      "kind": "weight",
+      "offset": 33280,
+      "nbytes": 512
+    },
+    {
+      "name": "m1",
+      "dtype": "f32",
+      "shape": [
+        8,
+        128
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "m1b",
+      "dtype": "f32",
+      "shape": [
+        8,
+        128
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "g",
+      "dtype": "f32",
+      "shape": [
+        8,
+        128
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "W2",
+      "dtype": "f32",
+      "shape": [
+        128,
+        32
+      ],
+      "kind": "weight",
+      "offset": 33792,
+      "nbytes": 16384
+    },
+    {
+      "name": "b2",
+      "dtype": "f32",
+      "shape": [
+        1,
+        32
+      ],
+      "kind": "weight",
+      "offset": 50176,
+      "nbytes": 128
+    },
+    {
+      "name": "m2",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "m2b",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "out",
+      "dtype": "f32",
+      "shape": [
+        8,
+        32
+      ],
+      "kind": "output"
+    }
+  ],
+  "nodes": [
+    {
+      "op": "LayerNorm",
+      "inputs": [
+        "x",
+        "ln1_g",
+        "ln1_b"
+      ],
+      "outputs": [
+        "h"
+      ],
+      "attrs": {
+        "eps": 1e-05
+      }
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "h",
+        "Wq"
+      ],
+      "outputs": [
+        "Q"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "h",
+        "Wk"
+      ],
+      "outputs": [
+        "K"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "h",
+        "Wv"
+      ],
+      "outputs": [
+        "V"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Reshape",
+      "inputs": [
+        "Q"
+      ],
+      "outputs": [
+        "Qr"
+      ],
+      "attrs": {
+        "shape": [
+          8,
+          2,
+          16
+        ]
+      }
+    },
+    {
+      "op": "Reshape",
+      "inputs": [
+        "K"
+      ],
+      "outputs": [
+        "Kr"
+      ],
+      "attrs": {
+        "shape": [
+          8,
+          2,
+          16
+        ]
+      }
+    },
+    {
+      "op": "Reshape",
+      "inputs": [
+        "V"
+      ],
+      "outputs": [
+        "Vr"
+      ],
+      "attrs": {
+        "shape": [
+          8,
+          2,
+          16
+        ]
+      }
+    },
+    {
+      "op": "Transpose",
+      "inputs": [
+        "Qr"
+      ],
+      "outputs": [
+        "Qh"
+      ],
+      "attrs": {
+        "perm": [
+          1,
+          0,
+          2
+        ]
+      }
+    },
+    {
+      "op": "Transpose",
+      "inputs": [
+        "Kr"
+      ],
+      "outputs": [
+        "Kh"
+      ],
+      "attrs": {
+        "perm": [
+          1,
+          0,
+          2
+        ]
+      }
+    },
+    {
+      "op": "Transpose",
+      "inputs": [
+        "Vr"
+      ],
+      "outputs": [
+        "Vh"
+      ],
+      "attrs": {
+        "perm": [
+          1,
+          0,
+          2
+        ]
+      }
+    },
+    {
+      "op": "Transpose",
+      "inputs": [
+        "Kh"
+      ],
+      "outputs": [
+        "KhT"
+      ],
+      "attrs": {
+        "perm": [
+          0,
+          2,
+          1
+        ]
+      }
+    },
+    {
+      "op": "BatchedMatMul",
+      "inputs": [
+        "Qh",
+        "KhT"
+      ],
+      "outputs": [
+        "scores"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Scale",
+      "inputs": [
+        "scores"
+      ],
+      "outputs": [
+        "scaled"
+      ],
+      "attrs": {
+        "scale": 0.25
+      }
+    },
+    {
+      "op": "Softmax",
+      "inputs": [
+        "scaled"
+      ],
+      "outputs": [
+        "attn"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "BatchedMatMul",
+      "inputs": [
+        "attn",
+        "Vh"
+      ],
+      "outputs": [
+        "ctx"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Transpose",
+      "inputs": [
+        "ctx"
+      ],
+      "outputs": [
+        "ctxT"
+      ],
+      "attrs": {
+        "perm": [
+          1,
+          0,
+          2
+        ]
+      }
+    },
+    {
+      "op": "Reshape",
+      "inputs": [
+        "ctxT"
+      ],
+      "outputs": [
+        "ctxM"
+      ],
+      "attrs": {
+        "shape": [
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "ctxM",
+        "Wo"
+      ],
+      "outputs": [
+        "ao"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "x",
+        "ao"
+      ],
+      "outputs": [
+        "x1"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "LayerNorm",
+      "inputs": [
+        "x1",
+        "ln2_g",
+        "ln2_b"
+      ],
+      "outputs": [
+        "h2"
+      ],
+      "attrs": {
+        "eps": 1e-05
+      }
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "h2",
+        "W1"
+      ],
+      "outputs": [
+        "m1"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "m1",
+        "b1"
+      ],
+      "outputs": [
+        "m1b"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Gelu",
+      "inputs": [
+        "m1b"
+      ],
+      "outputs": [
+        "g"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "g",
+        "W2"
+      ],
+      "outputs": [
+        "m2"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "m2",
+        "b2"
+      ],
+      "outputs": [
+        "m2b"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "x1",
+        "m2b"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attrs": {}
+    }
+  ],
+  "inputs": [
+    "x"
+  ],
+  "outputs": [
+    "out"
+  ]
+}

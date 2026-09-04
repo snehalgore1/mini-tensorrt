@@ -13,8 +13,11 @@ gap between a naive executor and a production runtime can be closed by hand.
 
 - Loads a static-shape model graph into a frontend-agnostic internal IR
 - Executes a constrained FP32 operator set on CPU
+- Runs real models end to end — an MLP and a **multi-head transformer block**
+  (LayerNorm, multi-head self-attention, MLP), both validated against PyTorch to
+  float32 rounding
 - Plans tensor lifetimes and packs intermediates into a single reused arena
-- Rewrites the graph with fusion passes, verified numerically equivalent
+- Rewrites the graph with fusion and constant-folding passes, verified numerically equivalent
 - Profiles per-operator cost and emits Chrome Trace Event output
 - Benchmarks against PyTorch eager and ONNX Runtime CPU
 

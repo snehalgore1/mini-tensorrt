@@ -19,6 +19,7 @@ void register_builtin_kernels(KernelRegistry& registry) {
   register_matmul_kernels(registry);
   register_activation_kernels(registry);
   register_fused_kernels(registry);
+  register_transformer_kernels(registry);
 }
 
 }  // namespace mtrt

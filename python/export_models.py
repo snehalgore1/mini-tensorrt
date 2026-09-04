@@ -14,7 +14,7 @@ import struct
 
 import numpy as np
 
-from model_def import build_mlp, to_f32
+from model_def import TF, build_mlp, build_transformer_params, to_f32
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 
@@ -93,5 +93,109 @@ def main():
     print(f"wrote {bin_path} ({len(blob)} bytes)")
 
 
+def export_transformer():
+    """Export the multi-head transformer block to transformer.json + .bin."""
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    p = build_transformer_params()
+    S, D, H, d, hidden = TF["S"], TF["D"], TF["H"], TF["d"], TF["hidden"]
+
+    # Weight blob, in a fixed order.
+    order = ["ln1_g", "ln1_b", "Wq", "Wk", "Wv", "Wo",
+             "ln2_g", "ln2_b", "W1", "b1", "W2", "b2"]
+    blob = bytearray()
+    meta = {}
+    for name in order:
+        off = len(blob)
+        data = p[name].tobytes(order="C")
+        blob += data
+        meta[name] = (off, len(data))
+
+    tensors = []
+
+    def T(name, shape, kind):
+        t = {"name": name, "dtype": "f32", "shape": shape, "kind": kind}
+        if kind == "weight":
+            t["offset"], t["nbytes"] = meta[name]
+        tensors.append(t)
+
+    T("x", [S, D], "input")
+    T("ln1_g", [D], "weight")
+    T("ln1_b", [D], "weight")
+    T("h", [S, D], "intermediate")
+    for w in ("Wq", "Wk", "Wv", "Wo"):
+        T(w, [D, D], "weight")
+    for t in ("Q", "K", "V"):
+        T(t, [S, D], "intermediate")
+    for t in ("Qr", "Kr", "Vr"):
+        T(t, [S, H, d], "intermediate")
+    for t in ("Qh", "Kh", "Vh"):
+        T(t, [H, S, d], "intermediate")
+    T("KhT", [H, d, S], "intermediate")
+    T("scores", [H, S, S], "intermediate")
+    T("scaled", [H, S, S], "intermediate")
+    T("attn", [H, S, S], "intermediate")
+    T("ctx", [H, S, d], "intermediate")
+    T("ctxT", [S, H, d], "intermediate")
+    T("ctxM", [S, D], "intermediate")
+    T("ao", [S, D], "intermediate")
+    T("x1", [S, D], "intermediate")
+    T("ln2_g", [D], "weight")
+    T("ln2_b", [D], "weight")
+    T("h2", [S, D], "intermediate")
+    T("W1", [D, hidden], "weight")
+    T("b1", [1, hidden], "weight")
+    T("m1", [S, hidden], "intermediate")
+    T("m1b", [S, hidden], "intermediate")
+    T("g", [S, hidden], "intermediate")
+    T("W2", [hidden, D], "weight")
+    T("b2", [1, D], "weight")
+    T("m2", [S, D], "intermediate")
+    T("m2b", [S, D], "intermediate")
+    T("out", [S, D], "output")
+
+    eps = TF["eps"]
+    scale = 1.0 / (d ** 0.5)
+    nodes = [
+        {"op": "LayerNorm", "inputs": ["x", "ln1_g", "ln1_b"], "outputs": ["h"],
+         "attrs": {"eps": eps}},
+        {"op": "MatMul", "inputs": ["h", "Wq"], "outputs": ["Q"], "attrs": {}},
+        {"op": "MatMul", "inputs": ["h", "Wk"], "outputs": ["K"], "attrs": {}},
+        {"op": "MatMul", "inputs": ["h", "Wv"], "outputs": ["V"], "attrs": {}},
+        {"op": "Reshape", "inputs": ["Q"], "outputs": ["Qr"], "attrs": {"shape": [S, H, d]}},
+        {"op": "Reshape", "inputs": ["K"], "outputs": ["Kr"], "attrs": {"shape": [S, H, d]}},
+        {"op": "Reshape", "inputs": ["V"], "outputs": ["Vr"], "attrs": {"shape": [S, H, d]}},
+        {"op": "Transpose", "inputs": ["Qr"], "outputs": ["Qh"], "attrs": {"perm": [1, 0, 2]}},
+        {"op": "Transpose", "inputs": ["Kr"], "outputs": ["Kh"], "attrs": {"perm": [1, 0, 2]}},
+        {"op": "Transpose", "inputs": ["Vr"], "outputs": ["Vh"], "attrs": {"perm": [1, 0, 2]}},
+        {"op": "Transpose", "inputs": ["Kh"], "outputs": ["KhT"], "attrs": {"perm": [0, 2, 1]}},
+        {"op": "BatchedMatMul", "inputs": ["Qh", "KhT"], "outputs": ["scores"], "attrs": {}},
+        {"op": "Scale", "inputs": ["scores"], "outputs": ["scaled"], "attrs": {"scale": scale}},
+        {"op": "Softmax", "inputs": ["scaled"], "outputs": ["attn"], "attrs": {}},
+        {"op": "BatchedMatMul", "inputs": ["attn", "Vh"], "outputs": ["ctx"], "attrs": {}},
+        {"op": "Transpose", "inputs": ["ctx"], "outputs": ["ctxT"], "attrs": {"perm": [1, 0, 2]}},
+        {"op": "Reshape", "inputs": ["ctxT"], "outputs": ["ctxM"], "attrs": {"shape": [S, D]}},
+        {"op": "MatMul", "inputs": ["ctxM", "Wo"], "outputs": ["ao"], "attrs": {}},
+        {"op": "Add", "inputs": ["x", "ao"], "outputs": ["x1"], "attrs": {}},
+        {"op": "LayerNorm", "inputs": ["x1", "ln2_g", "ln2_b"], "outputs": ["h2"],
+         "attrs": {"eps": eps}},
+        {"op": "MatMul", "inputs": ["h2", "W1"], "outputs": ["m1"], "attrs": {}},
+        {"op": "Add", "inputs": ["m1", "b1"], "outputs": ["m1b"], "attrs": {}},
+        {"op": "Gelu", "inputs": ["m1b"], "outputs": ["g"], "attrs": {}},
+        {"op": "MatMul", "inputs": ["g", "W2"], "outputs": ["m2"], "attrs": {}},
+        {"op": "Add", "inputs": ["m2", "b2"], "outputs": ["m2b"], "attrs": {}},
+        {"op": "Add", "inputs": ["x1", "m2b"], "outputs": ["out"], "attrs": {}},
+    ]
+
+    topo = {"name": "transformer_block", "weights_file": "transformer.bin",
+            "tensors": tensors, "nodes": nodes, "inputs": ["x"], "outputs": ["out"]}
+
+    with open(os.path.join(MODELS_DIR, "transformer.json"), "w") as f:
+        json.dump(topo, f, indent=2)
+    with open(os.path.join(MODELS_DIR, "transformer.bin"), "wb") as f:
+        f.write(blob)
+    print(f"wrote transformer.json + transformer.bin ({len(blob)} bytes)")
+
+
 if __name__ == "__main__":
     main()
+    export_transformer()

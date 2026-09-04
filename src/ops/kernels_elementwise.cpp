@@ -7,16 +7,17 @@
 namespace mtrt {
 namespace {
 
-// out = a + b, elementwise. Week 1: identical shapes, contiguous, FP32.
-// No broadcasting until a model needs it (scope tripwire).
+// out = a + b, contiguous, FP32. Two shapes supported: identical (elementwise,
+// e.g. residual add) and last-dim bias broadcast (b is [D] or [1,D] added to
+// every row of a's last dim, e.g. Linear bias over a sequence). Broadening
+// beyond this stays out of scope until a model needs it.
 void add_f32(const OpContext& ctx) {
   MTRT_ASSERT(ctx.inputs.size() == 2, "Add expects 2 inputs");
   MTRT_ASSERT(ctx.outputs.size() == 1, "Add expects 1 output");
   const Tensor& a = *ctx.inputs[0];
   const Tensor& b = *ctx.inputs[1];
   Tensor& out = *ctx.outputs[0];
-  MTRT_ASSERT(a.shape() == b.shape(), "Add requires identical input shapes");
-  MTRT_ASSERT(a.shape() == out.shape(), "Add output shape mismatch");
+  MTRT_ASSERT(a.shape() == out.shape(), "Add output shape must match first input");
   MTRT_ASSERT(a.is_contiguous() && b.is_contiguous() && out.is_contiguous(),
               "Add requires contiguous tensors");
 
@@ -24,7 +25,14 @@ void add_f32(const OpContext& ctx) {
   const float* pb = b.data<float>();
   float* po = out.data<float>();
   const int64_t n = out.numel();
-  for (int64_t i = 0; i < n; ++i) po[i] = pa[i] + pb[i];
+
+  if (a.shape() == b.shape()) {
+    for (int64_t i = 0; i < n; ++i) po[i] = pa[i] + pb[i];
+  } else {
+    const int64_t d = a.shape().back();
+    MTRT_ASSERT(b.numel() == d, "Add broadcast requires b to match the last dim");
+    for (int64_t i = 0; i < n; ++i) po[i] = pa[i] + pb[i % d];
+  }
 }
 
 // out = max(0, in), elementwise. Contiguous, FP32.
