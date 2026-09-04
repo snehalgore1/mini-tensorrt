@@ -38,6 +38,7 @@ add_library(mtrt STATIC
   src/ops/kernels_fused.cpp
   src/memory/memory_planner.cpp
   src/optimizer/fusion.cpp
+  src/optimizer/const_fold.cpp
   src/profiler/profiler.cpp
   src/frontend/json/json_loader.cpp
   src/runtime/executor.cpp)
