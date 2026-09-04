@@ -1,0 +1,26 @@
+build/
+build-*/
+cmake-build-*/
+.cache/
+compile_commands.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# generated models and fixtures are regenerable, but keep goldens small and committed
+models/*.bin
+models/*.onnx
+!models/goldens/
+
+# profiling output
+*.trace.json
+perf.data*
+*.dSYM/
+
+# editors
+.vscode/
+.idea/
+.DS_Store
