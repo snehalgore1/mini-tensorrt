@@ -12,10 +12,10 @@ are not reproducible.
 
 | Field | Value |
 |---|---|
-| Machine | TBD |
-| CPU | TBD |
-| Compiler | TBD |
-| Flags | TBD |
+| Machine | MacBook (arm64), macOS 26.6.2 |
+| CPU | Apple M1 Pro |
+| Compiler | Apple clang 21.0.0 (clang-2100.1.1.101) |
+| Flags | -O3 -DNDEBUG |
 | Build type | Release |
 
 ---
@@ -24,8 +24,13 @@ are not reproducible.
 
 | Model | Reference | Max abs error | Max rel error | Tolerance | Pass |
 |---|---|---|---|---|---|
-| MLP | PyTorch eager | TBD | TBD | atol 1e-6 | TBD |
-| MLP | ONNX Runtime CPU | TBD | TBD | atol 1e-6 | TBD |
+| MLP | PyTorch eager | 2.98e-08 | 1.16e-07 | rtol 1e-5, atol 1e-5 | yes |
+| MLP | ONNX Runtime CPU | TBD | TBD | TBD | TBD |
+
+Measured by the `Model.MlpMatchesPyTorch` golden test (Release build, environment
+above). The MLP ends in Softmax, so atol is 1e-5 per CLAUDE.md; the observed error is
+at float32 rounding level. The ONNX Runtime row is TBD until `python/reference.py`
+wires that comparison.
 
 ---
 

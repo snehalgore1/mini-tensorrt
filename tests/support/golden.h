@@ -17,6 +17,25 @@ namespace mtrt::testing {
 constexpr float kDefaultRtol = 1e-5f;
 constexpr float kDefaultAtol = 1e-6f;
 
+struct ErrorStats {
+  double max_abs = 0.0;
+  double max_rel = 0.0;
+};
+
+// Max absolute and max relative error between got and expected, elementwise.
+inline ErrorStats compute_error(const float* got, const float* exp, int64_t n) {
+  ErrorStats s;
+  for (int64_t i = 0; i < n; ++i) {
+    const double diff = std::abs(static_cast<double>(got[i]) - exp[i]);
+    if (diff > s.max_abs) s.max_abs = diff;
+    if (exp[i] != 0.0f) {
+      const double rel = diff / std::abs(exp[i]);
+      if (rel > s.max_rel) s.max_rel = rel;
+    }
+  }
+  return s;
+}
+
 // numpy-style allclose: |got - exp| <= atol + rtol*|exp|, elementwise.
 inline ::testing::AssertionResult AllClose(const float* got, const float* exp,
                                            int64_t n, float rtol, float atol) {

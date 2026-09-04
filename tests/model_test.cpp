@@ -1,3 +1,4 @@
+#include <iostream>
 #include <string>
 #include <unordered_map>
 
@@ -32,5 +33,10 @@ TEST(Model, MlpMatchesPyTorch) {
   ASSERT_EQ(outputs.size(), 1u);
 
   NpyArray expected = load_golden("mlp_output");
+  ErrorStats err = compute_error(outputs[0].data<float>(), expected.data.data(),
+                                 expected.numel());
+  // Emit for docs/RESULTS.md (traceable to this test run).
+  std::cout << "[RESULTS] MLP vs PyTorch eager: max_abs_err=" << err.max_abs
+            << " max_rel_err=" << err.max_rel << std::endl;
   ExpectGolden(outputs[0], expected, kDefaultRtol, 1e-5f);  // ends in Softmax
 }
