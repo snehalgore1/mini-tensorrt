@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "mtrt/memory/memory_planner.h"
+
 namespace mtrt {
 
 namespace {
@@ -30,20 +32,57 @@ void validate_node_shapes(const Graph& g, const Node& n) {
 }
 }  // namespace
 
-Executor::Executor(const Graph& graph, const KernelRegistry& registry)
+namespace {
+int64_t tensor_bytes(const TensorInfo& info) {
+  int64_t n = 1;
+  for (int64_t d : info.shape) n *= d;
+  return n * static_cast<int64_t>(dtype_size(info.dtype));
+}
+}  // namespace
+
+Executor::Executor(const Graph& graph, const KernelRegistry& registry,
+                   AllocatorKind allocator)
     : graph_(graph) {
   const std::vector<NodeId> order = graph_.topo_order();
 
-  // Allocate one owning tensor per Intermediate/Output id (naive baseline).
-  // Input/Weight slots stay empty until bound in run(). Sized once and never
-  // resized, so plan pointers into pool_ stay valid.
+  // pool_ is sized once and never resized after this, so the raw Tensor* stored
+  // in the plan stay valid (run() only assigns into existing slots).
   pool_.resize(static_cast<size_t>(graph_.num_tensors()));
+
+  // Outputs get their own owning buffers in both modes (they must outlive the
+  // arena). Sum of intermediate bytes is the naive peak / the reuse baseline.
+  int64_t intermediate_sum = 0;
+  int64_t intermediate_count = 0;
   for (TensorId id = 0; id < graph_.num_tensors(); ++id) {
     const TensorInfo& info = graph_.tensor(id);
-    if (info.kind == TensorKind::kIntermediate ||
-        info.kind == TensorKind::kOutput) {
+    if (info.kind == TensorKind::kOutput) {
       pool_[static_cast<size_t>(id)] = Tensor::owning(info.dtype, info.shape);
+    } else if (info.kind == TensorKind::kIntermediate) {
+      intermediate_sum += tensor_bytes(info);
+      intermediate_count++;
     }
+  }
+
+  if (allocator == AllocatorKind::kNaive) {
+    // One owning buffer per intermediate -- no reuse (DESIGN D11 baseline).
+    for (TensorId id = 0; id < graph_.num_tensors(); ++id) {
+      const TensorInfo& info = graph_.tensor(id);
+      if (info.kind == TensorKind::kIntermediate) {
+        pool_[static_cast<size_t>(id)] = Tensor::owning(info.dtype, info.shape);
+      }
+    }
+    stats_ = MemoryStats{intermediate_sum, intermediate_count, 0};
+  } else {
+    // Planned: one arena, intermediates are views at their assigned offsets.
+    const MemoryPlan mplan = plan_memory(graph_);
+    arena_ = Arena(mplan.total_bytes);
+    for (const auto& [id, offset] : mplan.offset) {
+      const TensorInfo& info = graph_.tensor(id);
+      pool_[static_cast<size_t>(id)] =
+          arena_.view_at(offset, info.dtype, info.shape);
+    }
+    stats_ = MemoryStats{mplan.total_bytes, mplan.total_bytes > 0 ? 1 : 0,
+                         intermediate_sum - mplan.total_bytes};
   }
 
   // Resolve each node to a kernel once and record it in the plan.

@@ -38,8 +38,15 @@ wires that comparison.
 
 | Configuration | Peak intermediate bytes | Allocation count | Bytes reused |
 |---|---|---|---|
-| Naive per-op allocator | TBD | TBD | 0 |
-| Greedy arena planner | TBD | TBD | TBD |
+| Naive per-op allocator | 224 | 5 | 0 |
+| Greedy arena planner | 128 | 1 | 96 |
+
+MLP intermediates (t0..t4): three [1,16] (64 B) and two [1,4] (16 B). The naive
+allocator gives each its own buffer (224 B, 5 allocations). The greedy-by-size
+planner reuses space between tensors whose lifetimes don't overlap, packing them
+into a single 128 B arena (1 allocation) -- a 43% reduction, 96 B reused.
+Measured by `MemoryPlanner.ReportStats` (16-byte aligned slots). Outputs, inputs,
+and weights are excluded (identical under both allocators).
 
 ---
 

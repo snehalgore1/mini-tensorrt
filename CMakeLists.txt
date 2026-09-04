@@ -35,6 +35,7 @@ add_library(mtrt STATIC
   src/ops/kernels_elementwise.cpp
   src/ops/kernels_matmul.cpp
   src/ops/kernels_activation.cpp
+  src/memory/memory_planner.cpp
   src/frontend/json/json_loader.cpp
   src/runtime/executor.cpp)
 
