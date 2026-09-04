@@ -1,5 +1,6 @@
 #include "mtrt/executor.h"
 
+#include <chrono>
 #include <stdexcept>
 #include <string>
 
@@ -125,10 +126,27 @@ std::vector<Tensor> Executor::run(
   }
 
   // Hot loop: direct calls through cached function pointers. No allocation, no
-  // map lookups, no virtual dispatch.
-  for (PlanStep& s : plan_) {
-    OpContext ctx{s.inputs, s.outputs, *s.node};
-    s.fn(ctx);
+  // map lookups, no virtual dispatch. The profiler branch is chosen once, not
+  // per node, so the untimed path stays clean.
+  if (profiler_ == nullptr) {
+    for (PlanStep& s : plan_) {
+      OpContext ctx{s.inputs, s.outputs, *s.node};
+      s.fn(ctx);
+    }
+  } else {
+    const auto run_start = std::chrono::steady_clock::now();
+    for (PlanStep& s : plan_) {
+      OpContext ctx{s.inputs, s.outputs, *s.node};
+      const auto t0 = std::chrono::steady_clock::now();
+      s.fn(ctx);
+      const auto t1 = std::chrono::steady_clock::now();
+      const auto ts =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(t0 - run_start)
+              .count();
+      const auto dur =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+      profiler_->record(s.node->op_type, ts, dur);
+    }
   }
 
   std::vector<Tensor> outputs;

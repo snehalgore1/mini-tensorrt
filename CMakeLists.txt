@@ -35,7 +35,10 @@ add_library(mtrt STATIC
   src/ops/kernels_elementwise.cpp
   src/ops/kernels_matmul.cpp
   src/ops/kernels_activation.cpp
+  src/ops/kernels_fused.cpp
   src/memory/memory_planner.cpp
+  src/optimizer/fusion.cpp
+  src/profiler/profiler.cpp
   src/frontend/json/json_loader.cpp
   src/runtime/executor.cpp)
 
@@ -51,5 +54,7 @@ if(MTRT_SANITIZERS)
 endif()
 
 # --- tests ------------------------------------------------------------------
+add_subdirectory(benchmarks)
+
 enable_testing()
 add_subdirectory(tests)

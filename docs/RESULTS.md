@@ -54,11 +54,22 @@ and weights are excluded (identical under both allocators).
 
 | Configuration | p50 latency | p95 latency | Peak intermediate bytes |
 |---|---|---|---|
-| Unfused | TBD | TBD | TBD |
-| MatMul+Bias+Gelu fused | TBD | TBD | TBD |
+| Unfused | ~330 ns | ~375 ns | 128 |
+| MatMul+Bias+Gelu fused | ~290 ns | ~334 ns | 80 |
 
-Per-operator profile before fusion: TBD
-Per-operator profile after fusion: TBD
+Measured by `benchmarks/bench_model --iters 5000` (Release, Apple M1 Pro), median
+of several runs. **Honest reading:** the memory result is exact and deterministic
+every run -- fusion eliminates the two intermediates (t0, t1) of the first Linear,
+cutting planned peak from 128 B to 80 B (37.5%). The *latency* gain is real but
+small and close to the measurement noise floor at this model size: p50 improves by
+0-40 ns run to run (mean drops ~15%), and the fused path is never slower. This is
+expected -- with only six ops on a [1,x] MLP there is little arithmetic to save;
+fusion's latency payoff grows with model size, where eliminating intermediate
+writes/reads and per-op overhead matters more. The fusion here is validated
+primarily as a *memory and IR-rewrite* win, with latency as a modest bonus.
+
+Per-operator flame chart: generate with `bench_model --trace mlp.trace.json` and
+open in chrome://tracing or Perfetto (trace files are gitignored, regenerable).
 
 ---
 

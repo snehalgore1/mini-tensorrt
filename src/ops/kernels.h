@@ -13,5 +13,6 @@ namespace mtrt {
 void register_elementwise_kernels(KernelRegistry& registry);
 void register_matmul_kernels(KernelRegistry& registry);
 void register_activation_kernels(KernelRegistry& registry);
+void register_fused_kernels(KernelRegistry& registry);
 
 }  // namespace mtrt

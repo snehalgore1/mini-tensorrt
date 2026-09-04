@@ -9,7 +9,8 @@ add_executable(mtrt_tests
   golden_kernel_test.cpp
   json_frontend_test.cpp
   model_test.cpp
-  memory_test.cpp)
+  memory_test.cpp
+  fusion_test.cpp)
 
 target_link_libraries(mtrt_tests PRIVATE mtrt GTest::gtest_main)
 # So tests can include "tests/support/..." helpers.

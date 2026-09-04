@@ -6,6 +6,7 @@
 #include "mtrt/graph.h"
 #include "mtrt/memory/arena.h"
 #include "mtrt/op_context.h"
+#include "mtrt/profiler/profiler.h"
 #include "mtrt/registry.h"
 #include "mtrt/tensor.h"
 
@@ -45,6 +46,10 @@ class Executor {
 
   MemoryStats memory_stats() const { return stats_; }
 
+  // When set, the next run() records per-node timings into this profiler. Pass
+  // nullptr to disable. The untimed path is unaffected.
+  void set_profiler(Profiler* profiler) { profiler_ = profiler; }
+
  private:
   struct PlanStep {
     KernelFn fn;                        // resolved once at setup
@@ -58,6 +63,7 @@ class Executor {
   std::vector<PlanStep> plan_;
   Arena arena_;                // backs planned intermediates (empty if naive)
   MemoryStats stats_;
+  Profiler* profiler_ = nullptr;  // non-owning; nullptr = untimed hot loop
 };
 
 }  // namespace mtrt
