@@ -18,6 +18,12 @@ void scale(const float* x, float* out, int n, float s);
 // out[n] = gelu_tanh(x[n])  (GPT-2 "gelu_new").
 void gelu_tanh(const float* x, float* out, int n);
 
+// out[n] = gelu(x[n])  (exact, erf-based).
+void gelu(const float* x, float* out, int n);
+
+// Plain softmax over the last dim: x is [rows, n].
+void softmax(const float* x, float* out, int rows, int n);
+
 // C[M,N] = A[M,K] @ B[K,N] via cuBLAS (SGEMM). Row-major inputs/outputs.
 void matmul(const float* A, const float* B, float* C, int M, int N, int K);
 

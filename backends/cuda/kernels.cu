@@ -47,6 +47,27 @@ __global__ void gelu_tanh_k(const float* x, float* out, int n) {
   }
 }
 
+__global__ void gelu_erf_k(const float* x, float* out, int n) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    const float v = x[i];
+    out[i] = 0.5f * v * (1.0f + erff(v * 0.7071067811865476f));
+  }
+}
+
+__global__ void softmax_k(const float* x, float* out, int rows, int n) {
+  const int r = blockIdx.x * blockDim.x + threadIdx.x;
+  if (r >= rows) return;
+  const float* row = x + (size_t)r * n;
+  float* orow = out + (size_t)r * n;
+  float m = row[0];
+  for (int j = 1; j < n; ++j) m = row[j] > m ? row[j] : m;
+  float sum = 0.f;
+  for (int j = 0; j < n; ++j) { const float e = expf(row[j] - m); orow[j] = e; sum += e; }
+  const float inv = 1.f / sum;
+  for (int j = 0; j < n; ++j) orow[j] *= inv;
+}
+
 cublasHandle_t g_handle = nullptr;
 cublasHandle_t handle() {
   if (!g_handle) {
@@ -77,6 +98,16 @@ void scale(const float* x, float* out, int n, float s) {
 
 void gelu_tanh(const float* x, float* out, int n) {
   gelu_tanh_k<<<blocks(n), kThreads>>>(x, out, n);
+  CUDA_CK(cudaGetLastError());
+}
+
+void gelu(const float* x, float* out, int n) {
+  gelu_erf_k<<<blocks(n), kThreads>>>(x, out, n);
+  CUDA_CK(cudaGetLastError());
+}
+
+void softmax(const float* x, float* out, int rows, int n) {
+  softmax_k<<<blocks(rows), kThreads>>>(x, out, rows, n);
   CUDA_CK(cudaGetLastError());
 }
 
