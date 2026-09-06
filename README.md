@@ -98,9 +98,11 @@ path (`run_gpt2 --mode bench`).
 The same `Graph` IR runs on a CUDA backend (all gated behind `-DMTRT_CUDA=ON`; the CPU build
 is untouched). A `CudaExecutor` uploads weights once and dispatches each node to a CUDA
 kernel (elementwise/LayerNorm/CausalSoftmax/Gather hand-written; matmul via cuBLAS). On a
-Tesla T4, **real GPT-2 124M runs end to end on the GPU and produces the same next-token
-predictions as the CPU** (0 argmax mismatches, max logit error 3.97e-4). See `colab/README.md`
-to reproduce.
+Tesla T4, **real GPT-2 124M runs end to end on the GPU in ~22 ms and produces the same
+next-token predictions as the CPU** (0 argmax mismatches, max logit error 3.97e-4). A
+hand-written shared-memory tiled SGEMM is also benchmarked against cuBLAS with the T4
+roofline (naive → tiled ≈ 2.3×; tiled ≈ 15% of cuBLAS, gap explained). See `docs/RESULTS.md`
+and `colab/README.md`.
 
 ### Per-operator profile
 
@@ -118,9 +120,9 @@ to be complete. Dynamic shapes, training, and broad operator coverage are out of
 
 ## What I would build next in a production runtime
 
-- **A tuned GPU GEMM.** The CUDA backend runs real GPT-2 on the GPU (matmul via cuBLAS); the
-  next step is a hand-written tiled shared-memory kernel with an honest roofline vs cuBLAS,
-  and a CPU-vs-GPU latency comparison.
+- **Close the GPU GEMM gap.** The hand-written tiled SGEMM reaches ~15% of cuBLAS; register/
+  warp blocking, double-buffering, and FP16 tensor cores (T4) are the next steps toward the
+  real inference fast path.
 - **Quantization (INT8 / FP16).** The FP32 path establishes correctness; INT8 with INT32
   accumulation (and an accuracy-vs-speed table on real GPT-2) is the production tradeoff that
   matters most, and FP16/tensor-cores is the real GPU inference path.

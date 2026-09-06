@@ -92,10 +92,37 @@ macOS/CPU build is untouched.
 | **Real GPT-2 124M: GPU vs CPU oracle** | **PASS — 0 argmax mismatches, max logit err 3.97e-4** |
 
 So real GPT-2 produces the same next-token predictions on the GPU as on the CPU (which
-matches HuggingFace). This is a **correctness** result; the GPU performance story
-(own tiled GEMM + roofline vs cuBLAS, CPU-vs-GPU latency) is measured next. Reproduce on
-Colab: see `colab/README.md`, then `cmake -B build -DMTRT_CUDA=ON && cmake --build build
---target cuda_model_test && ./build/backends/cuda/cuda_model_test`.
+matches HuggingFace). Reproduce on Colab: see `colab/README.md`.
+
+### GPU GEMM roofline (own kernel vs cuBLAS, Tesla T4)
+
+The GPU analogue of the CPU NEON ladder: a naive one-thread-per-output kernel, a
+shared-memory tiled kernel, and cuBLAS, in GFLOP/s (FP32, square).
+
+| N | naive | tiled | cuBLAS | tiled / cuBLAS |
+|---|---|---|---|---|
+| 512 | 365 | 598 | 3209 | 18.6% |
+| 1024 | 384 | 898 | 5763 | 15.6% |
+| 2048 | 450 | 896 | 5948 | 15.1% |
+
+Shared-memory tiling gives **~2.3× over naive** (each global element is reused `TILE`
+times); the tiled kernel then reaches **~15% of cuBLAS / ~11% of the T4's ~8.1 TFLOP/s FP32
+peak**, correct to 1.6e-4 vs cuBLAS. The remaining gap is the honest one: cuBLAS adds
+register/warp blocking, vectorized loads, and double-buffering that a single 32×32
+one-element-per-thread tile does not — the same "textbook kernel vs tuned library" story as
+NEON vs Accelerate. `bench_gemm_cuda`.
+
+### CPU vs GPU, whole model
+
+| System (same Colab host) | GPT-2 124M forward, S=64 |
+|---|---|
+| CPU executor | 1499.8 ms |
+| CUDA executor (T4) | **21.7 ms** |
+
+Real GPT-2 runs in **~22 ms on the T4**, a **69×** speedup here. Honest caveat: the CPU
+baseline is Colab's x86 CPU running the *portable scalar-fallback* GEMM — the tuned NEON
+path is arm64-only — so this ratio flatters the GPU; on an arm64 SIMD CPU the gap narrows.
+The GPU latency itself is the headline number. Measured by `cuda_model_test`.
 
 ---
 
