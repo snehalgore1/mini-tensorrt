@@ -16,7 +16,7 @@ namespace mtrt::cuda {
 
 class CudaExecutor {
  public:
-  explicit CudaExecutor(const LoadedModel& m);
+  explicit CudaExecutor(const frontend::LoadedModel& m);
   ~CudaExecutor();
   CudaExecutor(const CudaExecutor&) = delete;
   CudaExecutor& operator=(const CudaExecutor&) = delete;
@@ -27,7 +27,7 @@ class CudaExecutor {
   std::vector<float> run(const void* input_host);
 
  private:
-  const LoadedModel& m_;
+  const frontend::LoadedModel& m_;
   std::vector<void*> d_;        // device buffer per tensor id
   std::vector<int64_t> bytes_;  // byte size per tensor id
 };

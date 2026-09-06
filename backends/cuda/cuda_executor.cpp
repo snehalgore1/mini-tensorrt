@@ -32,7 +32,7 @@ int64_t numel(const std::vector<int64_t>& s) {
 }
 }  // namespace
 
-CudaExecutor::CudaExecutor(const LoadedModel& m) : m_(m) {
+CudaExecutor::CudaExecutor(const frontend::LoadedModel& m) : m_(m) {
   const int64_t nt = m_.graph.num_tensors();
   d_.assign(static_cast<size_t>(nt), nullptr);
   bytes_.assign(static_cast<size_t>(nt), 0);
