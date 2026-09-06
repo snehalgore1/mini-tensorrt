@@ -274,6 +274,25 @@ gaps: no software prefetch, a fixed (untuned) block size, and no packing of the 
 
 Reproduce: `./build/benchmarks/bench_gemm --sizes 256,512,1024,2048 && python python/plot_gemm.py`.
 
+### Cache-block autotuning (depth over novelty)
+
+Rather than assert the block sizes, sweep them: `bench_autotune` measures the NEON kernel
+across **36 (MC, NC, KC) configurations** (MC∈{64,128,256}, NC∈{64,128,256,512},
+KC∈{128,256,512}) at N=1024.
+
+| Configuration | GFLOP/s |
+|---|---|
+| Worst in sweep | 65.9 |
+| Ladder default (128 / 128 / 256) | 75.5 |
+| **Autotuned optimum (128 / 512 / 512)** | **~85** |
+
+**~12% over the hand-picked default**, and a 66→85 spread across the grid. The optimum has
+*larger* N and K blocks: the packed B panel (NC×KC×4 ≈ 1 MB) fits comfortably in the M1
+Pro's large L2, so bigger panels amortize packing and B-reload without spilling cache —
+the kernel is compute-bound, not L2-capacity-bound, at these sizes. Applying 128/512/512 to
+`gemm_neon` lifts single-core NEON to **~85 GFLOP/s ≈ 87% of the 1-core peak** (from ~79%),
+the one honest lever over the AMX-bound Accelerate gap. Reproduce: `./build/benchmarks/bench_autotune`.
+
 ---
 
 ## Full benchmark matrix (Week 8)

@@ -188,19 +188,22 @@ void gemm_packed(const float* A, const float* B, float* C, int M, int N, int K) 
 // ---- 5. NEON microkernel: wide 8x8 tile (16 float32x4 accumulators) --------
 // 8 rows x 8 cols = 16 accumulator vectors -> enough independent FMA chains to
 // hide latency and saturate the FMA units, unlike a 4x4 tile.
-void gemm_neon(const float* A, const float* B, float* C, int M, int N, int K) {
+// Parameterized NEON GEMM with runtime cache-block sizes, for the autotuning
+// sweep (bench_autotune). gemm_neon calls this with the default MC/NC/KC.
+void gemm_neon_blocked(const float* A, const float* B, float* C, int M, int N, int K,
+                       int bMC, int bNC, int bKC) {
 #if defined(__ARM_NEON)
   constexpr int NMR = 8, NNR = 8;
   std::fill(C, C + static_cast<long>(M) * N, 0.0f);
-  std::vector<float> packA(static_cast<size_t>(MC) * KC);
-  std::vector<float> packB(static_cast<size_t>(KC) * NC);
-  for (int jc = 0; jc < N; jc += NC) {
-    const int nc = std::min(NC, N - jc);
-    for (int pc = 0; pc < K; pc += KC) {
-      const int kc = std::min(KC, K - pc);
+  std::vector<float> packA(static_cast<size_t>(bMC) * bKC);
+  std::vector<float> packB(static_cast<size_t>(bKC) * bNC);
+  for (int jc = 0; jc < N; jc += bNC) {
+    const int nc = std::min(bNC, N - jc);
+    for (int pc = 0; pc < K; pc += bKC) {
+      const int kc = std::min(bKC, K - pc);
       pack_b(B, N, pc, kc, jc, nc, NNR, packB);
-      for (int ic = 0; ic < M; ic += MC) {
-        const int mc = std::min(MC, M - ic);
+      for (int ic = 0; ic < M; ic += bMC) {
+        const int mc = std::min(bMC, M - ic);
         pack_a(A, K, ic, mc, pc, kc, NMR, packA);
         for (int ir = 0; ir < mc; ir += NMR) {
           const float* pa = &packA[static_cast<size_t>(ir / NMR) * kc * NMR];
@@ -236,8 +239,16 @@ void gemm_neon(const float* A, const float* B, float* C, int M, int N, int K) {
     }
   }
 #else
+  (void)bMC; (void)bNC; (void)bKC;
   gemm_packed(A, B, C, M, N, K);  // no NEON: fall back to the packed scalar path
 #endif
+}
+
+void gemm_neon(const float* A, const float* B, float* C, int M, int N, int K) {
+  // Autotuned block sizes (bench_autotune): larger NC/KC panels fit the M1 Pro's
+  // L2, giving ~12% over the scalar-ladder default (128/128/256). The scalar
+  // tiled/packed steps keep the original MC/NC/KC so the documented ladder holds.
+  gemm_neon_blocked(A, B, C, M, N, K, /*MC=*/128, /*NC=*/512, /*KC=*/512);
 }
 
 // ---- 6. Multithreading: split output rows across the pool -----------------

@@ -16,6 +16,10 @@ void gemm_register(const float* A, const float* B, float* C, int M, int N, int K
 void gemm_tiled(const float* A, const float* B, float* C, int M, int N, int K);
 void gemm_packed(const float* A, const float* B, float* C, int M, int N, int K);
 void gemm_neon(const float* A, const float* B, float* C, int M, int N, int K);
+// NEON GEMM with runtime cache-block sizes (M/N/K blocking), for the autotuning
+// sweep in benchmarks/bench_autotune.cpp. gemm_neon uses the tuned defaults.
+void gemm_neon_blocked(const float* A, const float* B, float* C, int M, int N, int K,
+                       int bMC, int bNC, int bKC);
 void gemm_threaded(const float* A, const float* B, float* C, int M, int N, int K,
                    ThreadPool& pool);
 
