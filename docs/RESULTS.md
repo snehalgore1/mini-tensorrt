@@ -56,7 +56,23 @@ are regenerated (`python/export_gpt2_hf.py`), not committed; the C++ test skips 
 
 Generation uses a fixed-max-context static graph (fill positions 0..t, read `logits[t]`;
 causal masking makes later positions irrelevant), recomputing the graph per token —
-respecting the static-shape invariant. The **KV-cache** milestone removes that recompute.
+respecting the static-shape invariant.
+
+**KV-cache (N3).** A dedicated incremental-decode path caches each layer's K/V for past
+positions, so per token it computes Q/K/V only for the new token and attends over the
+cache (O(t) work) instead of recomputing the whole graph (O(S)):
+
+| Decode path | 20 tokens (prompt 4) | Output |
+|---|---|---|
+| Full-recompute static graph (N2) | 5415 ms | — |
+| KV-cache incremental (N3) | 2890 ms | **byte-identical ids** |
+
+**1.87× faster, identical tokens** (`run_gpt2 --mode bench` asserts id-for-id equality).
+This is a deliberate, bounded extension of the static-shape model — K/V buffers are
+pre-allocated to a fixed max context and a runtime position tracks the valid length. The
+speedup understates the asymptotic win: the recompute baseline does O(S) work per token
+regardless of position, so the gap widens with context length. Measured on Apple M1 Pro,
+Release; the incremental path reuses the tuned GEMM (`gemm_auto`) for its matvecs.
 
 ---
 
