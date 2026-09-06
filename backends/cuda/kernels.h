@@ -27,6 +27,12 @@ void softmax(const float* x, float* out, int rows, int n);
 // C[M,N] = A[M,K] @ B[K,N] via cuBLAS (SGEMM). Row-major inputs/outputs.
 void matmul(const float* A, const float* B, float* C, int M, int N, int K);
 
+// Hand-written FP32 GEMM (C[M,N] = A[M,K] @ B[K,N], row-major) for the roofline
+// study vs cuBLAS (bench_gemm_cuda): a naive one-thread-per-output kernel and a
+// shared-memory tiled kernel.
+void gemm_naive(const float* A, const float* B, float* C, int M, int N, int K);
+void gemm_tiled(const float* A, const float* B, float* C, int M, int N, int K);
+
 // LayerNorm over the last dim: out = (x-mean)/sqrt(var+eps)*gamma + beta, biased
 // variance (÷D), matching PyTorch. x is [rows, D]; gamma/beta are [D].
 void layernorm(const float* x, const float* gamma, const float* beta, float* out,

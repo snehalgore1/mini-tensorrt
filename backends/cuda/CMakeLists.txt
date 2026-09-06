@@ -14,7 +14,7 @@ add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets>)
 # GPU backend library: kernels (.cu) + the CudaExecutor (.cpp, host code that
 # dispatches graph nodes to the kernels). Links the CPU core (mtrt) for the Graph
 # IR / model loader it reuses.
-add_library(mtrt_cuda STATIC kernels.cu cuda_executor.cpp)
+add_library(mtrt_cuda STATIC kernels.cu gemm_cuda.cu cuda_executor.cpp)
 target_include_directories(mtrt_cuda PUBLIC
   ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR})
 target_link_libraries(mtrt_cuda PUBLIC CUDA::cudart CUDA::cublas mtrt)
@@ -39,3 +39,8 @@ target_link_libraries(cuda_model_test PRIVATE mtrt_cuda)
 target_compile_definitions(cuda_model_test PRIVATE
   MTRT_MODELS_DIR="${CMAKE_SOURCE_DIR}/models"
   MTRT_GOLDENS_DIR="${CMAKE_SOURCE_DIR}/models/goldens")
+
+# M4 GPU GEMM roofline study: our naive/tiled kernels vs cuBLAS.
+add_executable(bench_gemm_cuda bench_gemm_cuda.cu)
+target_include_directories(bench_gemm_cuda PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(bench_gemm_cuda PRIVATE mtrt_cuda)

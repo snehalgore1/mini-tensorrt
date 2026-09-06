@@ -7,6 +7,7 @@
 // GPT-2 has been exported (python/export_gpt2_hf.py), it also runs that on the GPU
 // and checks next-token argmax + logits vs the CPU path. Exit 0 = all pass.
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -91,6 +92,24 @@ int main() {
     std::vector<float> gpu = ce.run(ids.data<int32_t>());
     report("gpt2_124m", gpu, cpu[0], cpu[0].shape()[0], cpu[0].shape().back(),
            /*check_argmax=*/true);
+
+    // CPU-vs-GPU forward latency on this machine (same graph, both warmed up).
+    KernelRegistry reg;
+    register_builtin_kernels(reg);
+    Executor cpu_exec(m.graph, reg);
+    auto cpu_b = m.weights;
+    cpu_b.emplace(in_id, ids);
+    auto trun = [](auto&& fn, int iters) {
+      fn();  // warmup
+      const auto t0 = std::chrono::steady_clock::now();
+      for (int i = 0; i < iters; ++i) fn();
+      const auto t1 = std::chrono::steady_clock::now();
+      return std::chrono::duration<double, std::milli>(t1 - t0).count() / iters;
+    };
+    const double cpu_ms = trun([&] { cpu_exec.run(cpu_b); }, 5);
+    const double gpu_ms = trun([&] { ce.run(ids.data<int32_t>()); }, 20);
+    std::printf("[RESULTS] GPT-2 124M forward latency (S=%lld): cpu=%.1f ms, gpu=%.1f ms, "
+                "speedup=%.1fx\n", (long long)S, cpu_ms, gpu_ms, cpu_ms / gpu_ms);
   } else {
     std::printf("[CUDA-MODEL] gpt2_124m      SKIP  (export it: "
                 "python python/export_gpt2_hf.py --seq-len 64)\n");
