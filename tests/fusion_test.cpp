@@ -20,6 +20,7 @@ using namespace mtrt::testing;
 
 namespace {
 std::string mlp_json() { return std::string(MTRT_MODELS_DIR) + "/mlp.json"; }
+std::string gpt2_json() { return std::string(MTRT_MODELS_DIR) + "/gpt2_block.json"; }
 
 // Bindings keyed by tensor id, resolved from a name->Tensor map. Robust across
 // graph rewrites that renumber tensor ids (fusion), since names are preserved.
@@ -33,12 +34,14 @@ std::unordered_map<TensorId, Tensor> bindings_for(
   return b;
 }
 
-// weights + input, keyed by name.
-std::unordered_map<std::string, Tensor> inputs_by_name(const LoadedModel& m) {
+// weights + input, keyed by name. The input tensor is loaded from the named
+// golden fixture.
+std::unordered_map<std::string, Tensor> inputs_by_name(
+    const LoadedModel& m, const std::string& input_golden = "mlp_input") {
   std::unordered_map<std::string, Tensor> by_name;
   for (const auto& [id, w] : m.weights) by_name.emplace(m.graph.tensor(id).name, w);
   by_name.emplace(m.graph.tensor(m.graph.graph_inputs()[0]).name,
-                  tensor_from_npy(load_golden("mlp_input")));
+                  tensor_from_npy(load_golden(input_golden)));
   return by_name;
 }
 
@@ -101,6 +104,63 @@ TEST(Fusion, ReducesPeakMemory) {
   std::cout << "[RESULTS] planned peak bytes: unfused=" << unf
             << " fused=" << fus << std::endl;
   EXPECT_LT(fus, unf);  // fusion removes the t0/t1 intermediates
+}
+
+// --- GPT-2-small block: the real-model measurements for RESULTS.md. Skipped
+// unless the large, gitignored model + goldens have been exported. ------------
+
+TEST(FusionGpt2, FusesFfnAndPreservesNumerics) {
+  if (!file_exists(gpt2_json()) || !golden_exists("gpt2_output")) {
+    GTEST_SKIP() << "gpt2_block fixtures absent; run python/export_models.py"
+                    " && python/gen_goldens.py";
+  }
+  LoadedModel m = load_json_model(gpt2_json());
+  Graph fused = fuse_matmul_bias_gelu(m.graph);
+
+  // One MatMul+Bias+GeluTanh (the FFN) fuses per layer; no GeluTanh op remains.
+  EXPECT_GT(count_op(fused, kFusedMatMulBiasGeluTanh), 0);
+  EXPECT_EQ(count_op(fused, "GeluTanh"), 0);
+  EXPECT_LT(fused.num_nodes(), m.graph.num_nodes());
+  EXPECT_NO_THROW(fused.topo_order());
+
+  auto by_name = inputs_by_name(m, "gpt2_input");
+  KernelRegistry reg;
+  register_builtin_kernels(reg);
+
+  Executor unfused_exec(m.graph, reg);
+  Executor fused_exec(fused, reg);
+  std::vector<Tensor> a = unfused_exec.run(bindings_for(m.graph, by_name));
+  std::vector<Tensor> b = fused_exec.run(bindings_for(fused, by_name));
+
+  ASSERT_EQ(a.size(), 1u);
+  ASSERT_EQ(b.size(), 1u);
+  ASSERT_EQ(a[0].numel(), b[0].numel());
+  for (int64_t i = 0; i < a[0].numel(); ++i)
+    EXPECT_NEAR(a[0].data<float>()[i], b[0].data<float>()[i], 1e-4f);
+
+  // Whole-model correctness against PyTorch (atol loosened: deep pre-LN stack +
+  // fast-GEMM reassociation accumulate more fp error than a single op).
+  ExpectGolden(b[0], load_golden("gpt2_output"), kDefaultRtol, 1e-3f);
+}
+
+TEST(FusionGpt2, ReducesPeakMemory) {
+  if (!file_exists(gpt2_json())) {
+    GTEST_SKIP() << "gpt2_block.json absent; run python/export_models.py";
+  }
+  LoadedModel m = load_json_model(gpt2_json());
+  Graph fused = fuse_matmul_bias_gelu(m.graph);
+  KernelRegistry reg;
+  register_builtin_kernels(reg);
+
+  Executor unfused_exec(m.graph, reg);
+  Executor fused_exec(fused, reg);
+  const int64_t unf = unfused_exec.memory_stats().peak_bytes;
+  const int64_t fus = fused_exec.memory_stats().peak_bytes;
+  const double mb = 1.0 / (1024.0 * 1024.0);
+  std::cout << "[RESULTS] GPT2 planned peak bytes: unfused=" << unf << " ("
+            << unf * mb << " MB) fused=" << fus << " (" << fus * mb << " MB)"
+            << std::endl;
+  EXPECT_LT(fus, unf);
 }
 
 TEST(Profiler, RecordsPerNodeAndWritesTrace) {

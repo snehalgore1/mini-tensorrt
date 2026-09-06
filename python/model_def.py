@@ -113,3 +113,81 @@ def transformer_forward(params, x_np):
     m = F.gelu(h2 @ t["W1"] + t["b1"])                # [S, hidden]
     out = x1 + m @ t["W2"] + t["b2"]
     return to_f32(out)
+
+
+# --- GPT-2-small-scale stacked transformer ----------------------------------
+# Same pre-LN block as above but at realistic GPT-2-small dimensions and stacked
+# over N_LAYERS. This is the "real model" the Week 3/4 optimizations are measured
+# on: at these sizes memory planning saves megabytes and latency is milliseconds,
+# so the ablation numbers are meaningful (the tiny [S,D]=[8,32] block above gives
+# byte-scale numbers). The FFN uses tanh-approx GELU ("gelu_new"), GPT-2's real
+# activation, matching the GeluTanh kernel. Weights are large (~28 MB/layer f32),
+# so the exported .bin and goldens are regenerated, not committed (see .gitignore).
+GPT2 = {"S": 128, "D": 768, "H": 12, "hidden": 3072, "eps": 1e-5, "n_layers": 2}
+GPT2["d"] = GPT2["D"] // GPT2["H"]  # 64
+
+# Per-layer weight names, in blob order. Callers prefix with "l{i}_".
+GPT2_LAYER_WEIGHTS = ["ln1_g", "ln1_b", "Wq", "Wk", "Wv", "Wo",
+                      "ln2_g", "ln2_b", "W1", "b1", "W2", "b2"]
+
+
+def build_gpt2_params():
+    """Deterministic per-layer weights for the stacked GPT-2 block, in [in, out]
+    layout. Keys are prefixed by layer, e.g. 'l0_Wq'. Small init (~0.02) keeps
+    activations well-conditioned, as in real GPT-2."""
+    g = torch.Generator().manual_seed(SEED + 17)
+    D, hidden, n_layers = GPT2["D"], GPT2["hidden"], GPT2["n_layers"]
+
+    def r(*shape, s=0.02):
+        return (torch.randn(*shape, generator=g) * s).float()
+
+    params = {}
+    for i in range(n_layers):
+        layer = {
+            "ln1_g": (1.0 + r(D)),
+            "ln1_b": r(D),
+            "Wq": r(D, D),
+            "Wk": r(D, D),
+            "Wv": r(D, D),
+            "Wo": r(D, D),
+            "ln2_g": (1.0 + r(D)),
+            "ln2_b": r(D),
+            "W1": r(D, hidden),
+            "b1": r(1, hidden),
+            "W2": r(hidden, D),
+            "b2": r(1, D),
+        }
+        for k, v in layer.items():
+            params[f"l{i}_{k}"] = to_f32(v)
+    return params
+
+
+def sample_gpt2_input():
+    g = torch.Generator().manual_seed(SEED + 18)
+    return to_f32(torch.randn(GPT2["S"], GPT2["D"], generator=g))
+
+
+def gpt2_forward(params, x_np):
+    """Reference forward for the stacked GPT-2 block. Mirrors the exported graph
+    exactly (pre-LN block per layer, tanh-approx GELU in the FFN)."""
+    S, D, H, d = GPT2["S"], GPT2["D"], GPT2["H"], GPT2["d"]
+    eps, n_layers = GPT2["eps"], GPT2["n_layers"]
+    t = {k: torch.from_numpy(v) for k, v in params.items()}
+    x = torch.from_numpy(x_np)
+
+    for i in range(n_layers):
+        p = lambda name: t[f"l{i}_{name}"]  # noqa: E731
+        h = F.layer_norm(x, [D], p("ln1_g"), p("ln1_b"), eps)
+        Q, K, V = h @ p("Wq"), h @ p("Wk"), h @ p("Wv")
+        Qh = Q.reshape(S, H, d).permute(1, 0, 2)
+        Kh = K.reshape(S, H, d).permute(1, 0, 2)
+        Vh = V.reshape(S, H, d).permute(1, 0, 2)
+        scores = (Qh @ Kh.transpose(1, 2)) * (1.0 / (d ** 0.5))
+        attn = F.softmax(scores, dim=-1)
+        ctx = attn @ Vh
+        ctxM = ctx.permute(1, 0, 2).reshape(S, D)
+        x1 = x + ctxM @ p("Wo")
+        h2 = F.layer_norm(x1, [D], p("ln2_g"), p("ln2_b"), eps)
+        m = F.gelu(h2 @ p("W1") + p("b1"), approximate="tanh")  # gelu_new
+        x = x1 + m @ p("W2") + p("b2")
+    return to_f32(x)

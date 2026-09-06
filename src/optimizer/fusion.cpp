@@ -32,9 +32,11 @@ Graph fuse_matmul_bias_gelu(const Graph& graph) {
   };
 
   // For each fusion, remember the anchor MatMul node and the two nodes to drop
-  // (Add, Gelu), the bias input, and the final output tensor.
+  // (Add, activation), the bias input, the final output tensor, and which fused
+  // op to emit (depends on the activation matched).
   struct Fusion {
     TensorId x, w, bias, out;
+    const char* fused_op;
   };
   std::unordered_map<NodeId, Fusion> fusion_at_anchor;  // anchor node -> fusion
   std::unordered_set<NodeId> dropped_nodes;             // add + gelu nodes
@@ -79,12 +81,14 @@ Graph fuse_matmul_bias_gelu(const Graph& graph) {
     }
     if (gel_ni < 0) continue;
     const Node& gel = nodes[static_cast<size_t>(gel_ni)];
-    if (gel.op_type != "Gelu" || gel.inputs.size() != 1 ||
-        gel.outputs.size() != 1)
-      continue;
+    if (gel.inputs.size() != 1 || gel.outputs.size() != 1) continue;
+    const char* fused_op = nullptr;
+    if (gel.op_type == "Gelu") fused_op = kFusedMatMulBiasGelu;
+    else if (gel.op_type == "GeluTanh") fused_op = kFusedMatMulBiasGeluTanh;
+    else continue;
 
     fusion_at_anchor[static_cast<NodeId>(ni)] =
-        Fusion{mm.inputs[0], mm.inputs[1], bias, gel.outputs[0]};
+        Fusion{mm.inputs[0], mm.inputs[1], bias, gel.outputs[0], fused_op};
     dropped_nodes.insert(add_ni);
     dropped_nodes.insert(gel_ni);
     dropped_tensors.insert(t0);
@@ -106,7 +110,7 @@ Graph fuse_matmul_bias_gelu(const Graph& graph) {
     if (fit != fusion_at_anchor.end()) {
       const Fusion& f = fit->second;
       Node fused;
-      fused.op_type = kFusedMatMulBiasGelu;
+      fused.op_type = f.fused_op;
       fused.inputs = {rid(f.x), rid(f.w), rid(f.bias)};
       fused.outputs = {rid(f.out)};
       out.add_node(std::move(fused));

@@ -1,6 +1,8 @@
 #include "backends/cpu/gemm.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include "backends/cpu/thread_pool.h"
@@ -245,6 +247,37 @@ void gemm_threaded(const float* A, const float* B, float* C, int M, int N, int K
     const int rows = static_cast<int>(r1 - r0);
     gemm_neon(A + r0 * K, B, C + r0 * N, rows, N, K);
   });
+}
+
+namespace {
+// 0 naive, 1 neon, 2 auto (default), 3 threaded. Read once from MTRT_MATMUL.
+int matmul_mode() {
+  static const int mode = [] {
+    const char* e = std::getenv("MTRT_MATMUL");
+    if (!e) return 2;
+    if (!std::strcmp(e, "naive")) return 0;
+    if (!std::strcmp(e, "neon")) return 1;
+    if (!std::strcmp(e, "threaded")) return 3;
+    return 2;
+  }();
+  return mode;
+}
+}  // namespace
+
+void gemm_auto(const float* A, const float* B, float* C, int M, int N, int K) {
+  const int mode = matmul_mode();
+  if (mode == 0) return gemm_naive(A, B, C, M, N, K);
+  if (mode == 1) return gemm_neon(A, B, C, M, N, K);
+
+  static ThreadPool pool;  // built once, shared across all MatMul calls
+  // Thread only when there is enough work to amortize dispatch and enough rows
+  // to split; otherwise the single-core NEON kernel wins.
+  const long flops = 2L * M * N * K;
+  if (mode == 3 || (M >= 32 && flops >= (1L << 21))) {
+    gemm_threaded(A, B, C, M, N, K, pool);
+  } else {
+    gemm_neon(A, B, C, M, N, K);
+  }
 }
 
 }  // namespace mtrt::cpu

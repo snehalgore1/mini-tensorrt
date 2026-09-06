@@ -16,6 +16,7 @@ using namespace mtrt::testing;
 
 namespace {
 std::string mlp_json() { return std::string(MTRT_MODELS_DIR) + "/mlp.json"; }
+std::string gpt2_json() { return std::string(MTRT_MODELS_DIR) + "/gpt2_block.json"; }
 
 int64_t interval_bytes(const MemoryPlan& p, TensorId id) {
   for (const auto& iv : p.intervals)
@@ -106,6 +107,37 @@ TEST(MemoryPlanner, ReportStats) {
             << " bytes_reused=" << ps.bytes_reused << std::endl;
 
   EXPECT_EQ(ps.allocation_count, 1);
+  EXPECT_LT(ps.peak_bytes, ns.peak_bytes);
+  EXPECT_EQ(ps.bytes_reused, ns.peak_bytes - ps.peak_bytes);
+}
+
+// Same ablation on the GPT-2-small block: the numbers that actually matter for
+// RESULTS.md (megabyte-scale, unlike the toy MLP's bytes). Skipped unless the
+// large, gitignored model has been exported (python/export_models.py).
+TEST(MemoryPlanner, ReportStatsGpt2) {
+  if (!file_exists(gpt2_json())) {
+    GTEST_SKIP() << "gpt2_block.json absent; run python/export_models.py";
+  }
+  LoadedModel m = load_json_model(gpt2_json());
+  KernelRegistry reg;
+  register_builtin_kernels(reg);
+
+  Executor naive(m.graph, reg, AllocatorKind::kNaive);
+  Executor planned(m.graph, reg, AllocatorKind::kPlanned);
+  MemoryStats ns = naive.memory_stats();
+  MemoryStats ps = planned.memory_stats();
+
+  const double mb = 1.0 / (1024.0 * 1024.0);
+  std::cout << "[RESULTS] GPT2 naive:   peak_bytes=" << ns.peak_bytes << " ("
+            << ns.peak_bytes * mb << " MB) alloc_count=" << ns.allocation_count
+            << std::endl;
+  std::cout << "[RESULTS] GPT2 planned: peak_bytes=" << ps.peak_bytes << " ("
+            << ps.peak_bytes * mb << " MB) alloc_count=" << ps.allocation_count
+            << " bytes_reused=" << ps.bytes_reused << " ("
+            << ps.bytes_reused * mb << " MB, "
+            << (100.0 * ps.bytes_reused / ns.peak_bytes) << "% of naive peak)"
+            << std::endl;
+
   EXPECT_LT(ps.peak_bytes, ns.peak_bytes);
   EXPECT_EQ(ps.bytes_reused, ns.peak_bytes - ps.peak_bytes);
 }

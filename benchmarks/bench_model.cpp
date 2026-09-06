@@ -1,6 +1,7 @@
 // Whole-model latency benchmark: unfused vs fused MLP.
 //
-//   ./build/benchmarks/bench_model [--model path] [--iters N] [--trace path]
+//   ./build/benchmarks/bench_model [--model path] [--iters N] [--warmup N]
+//                                  [--trace path]
 //
 // Reports p50/p95/mean wall time per run() and planned peak intermediate bytes
 // for both graphs, and optionally writes a Chrome trace of one profiled run.
@@ -48,11 +49,11 @@ struct LatResult {
 
 LatResult bench(const Graph& g,
                 const std::unordered_map<std::string, Tensor>& by_name,
-                const KernelRegistry& reg, int iters) {
+                const KernelRegistry& reg, int iters, int warmup) {
   Executor exec(g, reg);
   auto bindings = bindings_for(g, by_name);
 
-  for (int i = 0; i < 50; ++i) exec.run(bindings);  // warm up
+  for (int i = 0; i < warmup; ++i) exec.run(bindings);  // warm up
 
   std::vector<double> samples;
   samples.reserve(iters);
@@ -77,9 +78,11 @@ int main(int argc, char** argv) {
   std::string model = std::string(MTRT_MODELS_DIR) + "/mlp.json";
   std::string trace_path;
   int iters = 2000;
+  int warmup = 50;
   for (int i = 1; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--model") && i + 1 < argc) model = argv[++i];
     else if (!std::strcmp(argv[i], "--iters") && i + 1 < argc) iters = std::atoi(argv[++i]);
+    else if (!std::strcmp(argv[i], "--warmup") && i + 1 < argc) warmup = std::atoi(argv[++i]);
     else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace_path = argv[++i];
   }
 
@@ -97,8 +100,8 @@ int main(int argc, char** argv) {
 
   Graph fused = fuse_matmul_bias_gelu(m.graph);
 
-  LatResult unf = bench(m.graph, by_name, reg, iters);
-  LatResult fus = bench(fused, by_name, reg, iters);
+  LatResult unf = bench(m.graph, by_name, reg, iters, warmup);
+  LatResult fus = bench(fused, by_name, reg, iters, warmup);
 
   std::cout << "model=" << model << " iters=" << iters << "\n";
   std::cout << "                  p50(ns)   p95(ns)  mean(ns)  peak_bytes\n";

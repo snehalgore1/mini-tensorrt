@@ -116,3 +116,28 @@ TEST(Golden, BatchedMatMul) {
   run_kernel("BatchedMatMul", {&a, &b}, out);
   ExpectGolden(out, load_golden("op_bmm_out"));
 }
+
+TEST(Golden, GeluTanh) {
+  Tensor in = tensor_from_npy(load_golden("op_gelutanh_in"));
+  Tensor out = Tensor::owning(DType::kF32, in.shape());
+  run_kernel("GeluTanh", {&in}, out);
+  ExpectGolden(out, load_golden("op_gelutanh_out"), kDefaultRtol, 1e-5f);
+}
+
+TEST(Golden, Gather) {
+  Tensor table = tensor_from_npy(load_golden("op_gather_table"));  // [10,4]
+  // Indices kept in sync with GATHER_IDS in gen_goldens.py.
+  const int32_t ids_v[] = {3, 1, 4, 1, 5};
+  Tensor ids = Tensor::owning(DType::kI32, {5});
+  for (int i = 0; i < 5; ++i) ids.data<int32_t>()[i] = ids_v[i];
+  Tensor out = Tensor::owning(DType::kF32, {5, table.shape()[1]});
+  run_kernel("Gather", {&table, &ids}, out);
+  ExpectGolden(out, load_golden("op_gather_out"));
+}
+
+TEST(Golden, CausalSoftmax) {
+  Tensor in = tensor_from_npy(load_golden("op_causalsoftmax_in"));  // [2,4,4]
+  Tensor out = Tensor::owning(DType::kF32, in.shape());
+  run_kernel("CausalSoftmax", {&in}, out);
+  ExpectGolden(out, load_golden("op_causalsoftmax_out"));
+}

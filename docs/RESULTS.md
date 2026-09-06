@@ -34,42 +34,120 @@ wires that comparison.
 
 ---
 
+## Real GPT-2 124M — end-to-end real workload (#2)
+
+The runtime loads **real GPT-2-small (124M)** weights exported from HuggingFace
+(12 layers, 12 heads, d=768, vocab 50257; ~622 MB FP32; 365-node graph) and both
+reproduces its logits and generates identical text.
+
+| Check | Result |
+|---|---|
+| Logit parity vs HuggingFace (seq_len 64) | **0 / 64** next-token argmax mismatches; max abs logit err **4.3e-4** |
+| Greedy generation vs HF `generate(do_sample=False)` | **identical token ids** |
+
+Example (`python/gpt2_generate.py --prompt "The quick brown fox" --max-new 20 --check`):
+
+> The quick brown foxes are a great way to get a little bit of a kick out of your dog.
+
+matches HuggingFace greedy decoding exactly. Measured by `Gpt2Real.LogitsMatchHuggingFace`
+(logit parity) and the `--check` path of `python/gpt2_generate.py` (generation parity).
+The runtime does the full inference; only tokenization/detokenization is Python. Weights
+are regenerated (`python/export_gpt2_hf.py`), not committed; the C++ test skips when absent.
+
+Generation uses a fixed-max-context static graph (fill positions 0..t, read `logits[t]`;
+causal masking makes later positions irrelevant), recomputing the graph per token —
+respecting the static-shape invariant. The **KV-cache** milestone removes that recompute.
+
+---
+
 ## Memory planning (Week 3)
 
-| Configuration | Peak intermediate bytes | Allocation count | Bytes reused |
-|---|---|---|---|
-| Naive per-op allocator | 224 | 5 | 0 |
-| Greedy arena planner | 128 | 1 | 96 |
+| Model | Configuration | Peak intermediate bytes | Alloc count | Bytes reused | Reduction |
+|---|---|---|---|---|---|
+| MLP | Naive per-op allocator | 224 | 5 | 0 | — |
+| MLP | Greedy arena planner | 128 | 1 | 96 | 43% |
+| GPT-2 block (2 layers) | Naive per-op allocator | 29,491,200 (28.1 MB) | 51 | 0 | — |
+| GPT-2 block (2 layers) | Greedy arena planner | 3,538,944 (3.4 MB) | 1 | 25,952,256 (24.8 MB) | **88%** |
 
 MLP intermediates (t0..t4): three [1,16] (64 B) and two [1,4] (16 B). The naive
 allocator gives each its own buffer (224 B, 5 allocations). The greedy-by-size
 planner reuses space between tensors whose lifetimes don't overlap, packing them
 into a single 128 B arena (1 allocation) -- a 43% reduction, 96 B reused.
-Measured by `MemoryPlanner.ReportStats` (16-byte aligned slots). Outputs, inputs,
-and weights are excluded (identical under both allocators).
+
+**The MLP is too small for the absolute numbers to mean anything (96 B).** The
+GPT-2-small block (S=128, D=768, H=12, FFN=3072, 2 layers) is where the planner
+earns its keep: 51 intermediates totalling **28.1 MB** under the naive allocator
+collapse into a single **3.4 MB** arena -- an **88% reduction, 24.8 MB reused**.
+The deeper win vs the MLP is structural: a transformer is a long chain of
+mostly single-consumer intermediates (projections, attention scratch, the
+[128,3072] FFN activations), so most lifetimes are disjoint and the arena packs
+them tightly. Measured by `MemoryPlanner.ReportStats` / `ReportStatsGpt2`
+(16-byte aligned slots). Outputs, inputs, and weights are excluded (identical
+under both allocators). The GPT-2 model is regenerated, not committed
+(`python/export_models.py`); the test skips when it is absent.
 
 ---
 
 ## Fusion (Week 4)
 
-| Configuration | p50 latency | p95 latency | Peak intermediate bytes |
+| Model | Configuration | p50 latency | p95 latency | Peak intermediate bytes |
+|---|---|---|---|---|
+| MLP | Unfused | ~330 ns | ~375 ns | 128 |
+| MLP | MatMul+Bias+Gelu fused | ~290 ns | ~334 ns | 80 |
+| GPT-2 block | Unfused | ~73.3 ms | ~77.9 ms | 3,538,944 (3.4 MB) |
+| GPT-2 block | +FFN fused (MatMul+Bias+GeluTanh) | ~72.0 ms | ~75.3 ms | 2,359,296 (2.25 MB) |
+
+MLP measured by `bench_model --iters 5000`; GPT-2 by `bench_model --model
+models/gpt2_block.json --warmup 20 --iters 200` (Release, Apple M1 Pro), median of
+several runs. **Honest reading:** fusion's win here is **memory, not latency**, at
+both sizes. On the MLP it cuts planned peak 128 B -> 80 B (37.5%); on the GPT-2
+block the per-layer FFN Linear->Bias->GeluTanh collapses into one node, cutting
+peak intermediate memory **3.4 MB -> 2.25 MB (33%)**. The latency delta is small
+and near the noise floor (MLP: ~15% of nanoseconds; GPT-2: ~1-2% of ~73 ms) and
+the fused path is never slower. This is expected once the MatMul runs on the tuned
+GEMM (below): the fused epilogue saves an intermediate write/read of the FFN
+activation, but the matmul FLOPs dominate, so the memory saving shows up far more
+clearly than the latency one. Fusion is validated primarily as a *memory and
+IR-rewrite* win. (The GPT-2 FFN uses tanh-approx GELU, GPT-2's "gelu_new", hence
+the `FusedMatMulBiasGeluTanh` variant.)
+
+---
+
+## GEMM in the model + per-op profile (Week 4/5 tie-in)
+
+The Week-5 GEMM ladder was previously reachable only from `bench_gemm`; the model
+executor's `MatMul` ran the naive triple loop. Wiring the tuned ladder
+(`gemm_auto`: packed 8x8 NEON microkernel, multithreaded above a size threshold)
+into the `MatMul` (and fused) kernels makes it accelerate a real model.
+`MTRT_MATMUL=naive|neon|threaded` overrides the dispatch (naive = the ablation
+baseline).
+
+| GPT-2 block, MatMul path | p50 latency (unfused) | Speedup |
+|---|---|---|
+| `MTRT_MATMUL=naive` (triple loop) | ~2,289 ms | 1.0x |
+| default (NEON microkernel + threaded) | ~73.3 ms | **~31x** |
+
+Per-operator attribution of one optimized run (`bench_model --trace`, ~75.7 ms):
+
+| Op | Time | Share | Note |
 |---|---|---|---|
-| Unfused | ~330 ns | ~375 ns | 128 |
-| MatMul+Bias+Gelu fused | ~290 ns | ~334 ns | 80 |
+| BatchedMatMul | 34.8 ms | 45.9% | attention QK^T and attn·V -- **still the naive kernel** |
+| MatMul | 31.6 ms | 41.7% | projections + FFN, now on the tuned GEMM |
+| Transpose | 3.3 ms | 4.4% | head-split / merge copies |
+| GeluTanh | 3.1 ms | 4.1% | |
+| Softmax / LayerNorm / Add / Reshape / Scale | <2 ms each | <5% total | |
 
-Measured by `benchmarks/bench_model --iters 5000` (Release, Apple M1 Pro), median
-of several runs. **Honest reading:** the memory result is exact and deterministic
-every run -- fusion eliminates the two intermediates (t0, t1) of the first Linear,
-cutting planned peak from 128 B to 80 B (37.5%). The *latency* gain is real but
-small and close to the measurement noise floor at this model size: p50 improves by
-0-40 ns run to run (mean drops ~15%), and the fused path is never slower. This is
-expected -- with only six ops on a [1,x] MLP there is little arithmetic to save;
-fusion's latency payoff grows with model size, where eliminating intermediate
-writes/reads and per-op overhead matters more. The fusion here is validated
-primarily as a *memory and IR-rewrite* win, with latency as a modest bonus.
+**Reading (profile before optimizing).** Speeding up `MatMul` gave ~31x on the
+full model and, as expected, shifted the bottleneck: attention's **naive
+`BatchedMatMul` is now the single hottest op (45.9%)** because it was never
+optimized. That is the clear next step -- route each batch slice of
+`BatchedMatMul` through the same `gemm_auto` -- and would roughly halve the
+remaining runtime. Recorded here rather than done silently (one optimization per
+commit; the profiler now justifies it).
 
-Per-operator flame chart: generate with `bench_model --trace mlp.trace.json` and
-open in chrome://tracing or Perfetto (trace files are gitignored, regenerable).
+Per-operator flame chart: generate with `bench_model --model
+models/gpt2_block.json --trace gpt2.trace.json` and open in chrome://tracing or
+Perfetto (trace files are gitignored, regenerable).
 
 ---
 

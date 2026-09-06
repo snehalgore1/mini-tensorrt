@@ -1,3 +1,4 @@
+#include "backends/cpu/gemm.h"
 #include "kernels.h"
 #include "mtrt/support/assert.h"
 #include "mtrt/tensor.h"
@@ -5,9 +6,11 @@
 namespace mtrt {
 namespace {
 
-// C[M,N] = A[M,K] @ B[K,N]. Naive triple loop -- the correctness baseline. This
-// is the kernel Week 5 rewrites step by step; the naive version stays behind a
-// flag as the ablation baseline (DESIGN D9, D11). FP32, contiguous, rank 2.
+// C[M,N] = A[M,K] @ B[K,N]. Dispatches to the Week-5 optimized GEMM ladder
+// (packed NEON microkernel, multithreaded above a size threshold) via gemm_auto;
+// MTRT_MATMUL=naive restores the triple-loop ablation baseline (DESIGN D9, D11).
+// This is what lets the tuned GEMM actually accelerate a real model, not just
+// the standalone bench_gemm. FP32, contiguous, rank 2.
 void matmul_f32(const OpContext& ctx) {
   MTRT_ASSERT(ctx.inputs.size() == 2, "MatMul expects 2 inputs");
   MTRT_ASSERT(ctx.outputs.size() == 1, "MatMul expects 1 output");
@@ -25,18 +28,8 @@ void matmul_f32(const OpContext& ctx) {
   MTRT_ASSERT(B.shape()[0] == K, "MatMul inner dimensions disagree");
   MTRT_ASSERT(C.shape()[0] == M && C.shape()[1] == N, "MatMul output shape wrong");
 
-  const float* a = A.data<float>();
-  const float* b = B.data<float>();
-  float* c = C.data<float>();
-  for (int64_t i = 0; i < M; ++i) {
-    for (int64_t j = 0; j < N; ++j) {
-      float acc = 0.0f;
-      for (int64_t k = 0; k < K; ++k) {
-        acc += a[i * K + k] * b[k * N + j];
-      }
-      c[i * N + j] = acc;
-    }
-  }
+  cpu::gemm_auto(A.data<float>(), B.data<float>(), C.data<float>(),
+                 static_cast<int>(M), static_cast<int>(N), static_cast<int>(K));
 }
 
 }  // namespace

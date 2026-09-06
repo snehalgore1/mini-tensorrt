@@ -8,14 +8,17 @@
 
 namespace mtrt {
 
-// Op type of the fused node produced below.
+// Op types of the fused nodes produced below (erf GELU and GPT-2's tanh-approx
+// "gelu_new" respectively).
 inline constexpr const char* kFusedMatMulBiasGelu = "FusedMatMulBiasGelu";
+inline constexpr const char* kFusedMatMulBiasGeluTanh = "FusedMatMulBiasGeluTanh";
 
-// Fuse every MatMul -> Add(bias) -> Gelu chain into a single node computing
-// gelu(A @ B + bias). Only fuses when the MatMul and Add outputs are
-// intermediates with a single consumer and are not graph outputs, so no other
-// node depends on the eliminated tensors. Returns a new, compacted graph; the
-// input graph is unchanged.
+// Fuse every MatMul -> Add(bias) -> Gelu/GeluTanh chain into a single node
+// computing act(A @ B + bias), where act matches the activation found (Gelu ->
+// kFusedMatMulBiasGelu, GeluTanh -> kFusedMatMulBiasGeluTanh). Only fuses when
+// the MatMul and Add outputs are intermediates with a single consumer and are
+// not graph outputs, so no other node depends on the eliminated tensors. Returns
+// a new, compacted graph; the input graph is unchanged.
 Graph fuse_matmul_bias_gelu(const Graph& graph);
 
 }  // namespace mtrt

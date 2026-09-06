@@ -17,8 +17,11 @@ import torch.nn.functional as F
 
 from model_def import (
     TF,
+    build_gpt2_params,
     build_mlp,
     build_transformer_params,
+    gpt2_forward,
+    sample_gpt2_input,
     sample_input,
     sample_transformer_input,
     to_f32,
@@ -117,12 +120,51 @@ def gen_transformer_model_goldens():
     save("tf_output", transformer_forward(params, x))
 
 
+# GPT-specific op goldens. The Gather indices are hard-coded in the C++ test
+# (the .npy reader is f32-only), so keep this list in sync there.
+GATHER_IDS = [3, 1, 4, 1, 5]
+
+
+def gen_gpt_op_goldens():
+    g = torch.Generator().manual_seed(789)
+
+    # tanh-approx GELU (GPT-2 gelu_new).
+    x = torch.randn(3, 4, generator=g)
+    save("op_gelutanh_in", to_f32(x))
+    save("op_gelutanh_out", to_f32(F.gelu(x, approximate="tanh")))
+
+    # Embedding gather: table[10,4], out = table[ids].
+    table = torch.randn(10, 4, generator=g)
+    ids = torch.tensor(GATHER_IDS, dtype=torch.long)
+    save("op_gather_table", to_f32(table))
+    save("op_gather_out", to_f32(table[ids]))
+
+    # CausalSoftmax: [H,S,S] scores, softmax over keys with j>i masked to 0.
+    H, S = 2, 4
+    scores = torch.randn(H, S, S, generator=g)
+    mask = torch.triu(torch.full((S, S), float("-inf")), diagonal=1)
+    out = torch.softmax(scores + mask, dim=-1)  # masked rows -> 0 after softmax
+    save("op_causalsoftmax_in", to_f32(scores))
+    save("op_causalsoftmax_out", to_f32(out))
+
+
+def gen_gpt2_model_goldens():
+    """Whole-model golden for the stacked GPT-2 block. Large (S*D floats) and
+    regenerable, so gitignored -- the C++ test that uses it skips when absent."""
+    params = build_gpt2_params()
+    x = sample_gpt2_input()
+    save("gpt2_input", x)
+    save("gpt2_output", gpt2_forward(params, x))
+
+
 def main():
     os.makedirs(GOLDENS_DIR, exist_ok=True)
     gen_op_goldens()
     gen_model_goldens()
     gen_transformer_op_goldens()
     gen_transformer_model_goldens()
+    gen_gpt_op_goldens()
+    gen_gpt2_model_goldens()
     print(f"wrote golden fixtures to {GOLDENS_DIR}")
 
 

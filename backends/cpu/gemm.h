@@ -19,4 +19,11 @@ void gemm_neon(const float* A, const float* B, float* C, int M, int N, int K);
 void gemm_threaded(const float* A, const float* B, float* C, int M, int N, int K,
                    ThreadPool& pool);
 
+// Convenience dispatcher for the model executor's MatMul kernels: picks
+// gemm_neon vs gemm_threaded by problem size, reusing a shared internal thread
+// pool (built once). The env var MTRT_MATMUL=naive|neon|threaded forces a single
+// variant, which keeps the naive triple loop selectable as the ablation baseline
+// (DESIGN D9, D11).
+void gemm_auto(const float* A, const float* B, float* C, int M, int N, int K);
+
 }  // namespace mtrt::cpu

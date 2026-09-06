@@ -13,6 +13,7 @@ add_executable(mtrt_tests
   fusion_test.cpp
   const_fold_test.cpp
   transformer_test.cpp
+  gpt2_real_test.cpp
   gemm_test.cpp)
 
 target_link_libraries(mtrt_tests PRIVATE mtrt GTest::gtest_main)

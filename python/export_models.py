@@ -14,7 +14,15 @@ import struct
 
 import numpy as np
 
-from model_def import TF, build_mlp, build_transformer_params, to_f32
+from model_def import (
+    GPT2,
+    GPT2_LAYER_WEIGHTS,
+    TF,
+    build_gpt2_params,
+    build_mlp,
+    build_transformer_params,
+    to_f32,
+)
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
 
@@ -196,6 +204,124 @@ def export_transformer():
     print(f"wrote transformer.json + transformer.bin ({len(blob)} bytes)")
 
 
+def export_gpt2():
+    """Export the stacked GPT-2-small block to gpt2_block.json + .bin.
+
+    Same pre-LN block as export_transformer(), but at GPT-2-small dims and
+    stacked over N_LAYERS with tanh-approx GELU in the FFN. Every tensor is
+    prefixed per layer ('l{i}_'); the residual stream is threaded layer to layer
+    (layer 0 consumes the graph input 'x'; the last layer produces 'out'). The
+    weights blob is large (~57 MB), so this file and its goldens are gitignored
+    and regenerated on demand (DESIGN D8 committed-fixture rule applies to the
+    small models only)."""
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    p = build_gpt2_params()
+    S, D, H, d = GPT2["S"], GPT2["D"], GPT2["H"], GPT2["d"]
+    hidden, eps, n_layers = GPT2["hidden"], GPT2["eps"], GPT2["n_layers"]
+    scale = 1.0 / (d ** 0.5)
+
+    # Weight blob: per layer, in GPT2_LAYER_WEIGHTS order, prefixed.
+    blob = bytearray()
+    meta = {}
+    for i in range(n_layers):
+        for name in GPT2_LAYER_WEIGHTS:
+            key = f"l{i}_{name}"
+            off = len(blob)
+            data = p[key].tobytes(order="C")
+            blob += data
+            meta[key] = (off, len(data))
+
+    tensors = []
+    nodes = []
+
+    def T(name, shape, kind):
+        t = {"name": name, "dtype": "f32", "shape": shape, "kind": kind}
+        if kind == "weight":
+            t["offset"], t["nbytes"] = meta[name]
+        tensors.append(t)
+
+    T("x", [S, D], "input")
+
+    def emit_layer(i, xin, xout):
+        """Append one pre-LN block's tensors and nodes; residual in=xin, out=xout."""
+        q = f"l{i}_"
+
+        def w(name):  # weight tensor for this layer
+            return q + name
+
+        def iv(name, shape):  # per-layer intermediate
+            T(q + name, shape, "intermediate")
+            return q + name
+
+        for name in GPT2_LAYER_WEIGHTS:
+            wt = p[q + name]
+            T(q + name, list(wt.shape), "weight")
+
+        h = iv("h", [S, D])
+        Q, K, V = iv("Q", [S, D]), iv("K", [S, D]), iv("V", [S, D])
+        Qr, Kr, Vr = iv("Qr", [S, H, d]), iv("Kr", [S, H, d]), iv("Vr", [S, H, d])
+        Qh, Kh, Vh = iv("Qh", [H, S, d]), iv("Kh", [H, S, d]), iv("Vh", [H, S, d])
+        KhT = iv("KhT", [H, d, S])
+        scores, scaled, attn = iv("scores", [H, S, S]), iv("scaled", [H, S, S]), iv("attn", [H, S, S])
+        ctx = iv("ctx", [H, S, d])
+        ctxT = iv("ctxT", [S, H, d])
+        ctxM = iv("ctxM", [S, D])
+        ao = iv("ao", [S, D])
+        x1 = iv("x1", [S, D])
+        h2 = iv("h2", [S, D])
+        m1, m1b, gact = iv("m1", [S, hidden]), iv("m1b", [S, hidden]), iv("g", [S, hidden])
+        m2, m2b = iv("m2", [S, D]), iv("m2b", [S, D])
+
+        nodes.extend([
+            {"op": "LayerNorm", "inputs": [xin, w("ln1_g"), w("ln1_b")], "outputs": [h], "attrs": {"eps": eps}},
+            {"op": "MatMul", "inputs": [h, w("Wq")], "outputs": [Q], "attrs": {}},
+            {"op": "MatMul", "inputs": [h, w("Wk")], "outputs": [K], "attrs": {}},
+            {"op": "MatMul", "inputs": [h, w("Wv")], "outputs": [V], "attrs": {}},
+            {"op": "Reshape", "inputs": [Q], "outputs": [Qr], "attrs": {"shape": [S, H, d]}},
+            {"op": "Reshape", "inputs": [K], "outputs": [Kr], "attrs": {"shape": [S, H, d]}},
+            {"op": "Reshape", "inputs": [V], "outputs": [Vr], "attrs": {"shape": [S, H, d]}},
+            {"op": "Transpose", "inputs": [Qr], "outputs": [Qh], "attrs": {"perm": [1, 0, 2]}},
+            {"op": "Transpose", "inputs": [Kr], "outputs": [Kh], "attrs": {"perm": [1, 0, 2]}},
+            {"op": "Transpose", "inputs": [Vr], "outputs": [Vh], "attrs": {"perm": [1, 0, 2]}},
+            {"op": "Transpose", "inputs": [Kh], "outputs": [KhT], "attrs": {"perm": [0, 2, 1]}},
+            {"op": "BatchedMatMul", "inputs": [Qh, KhT], "outputs": [scores], "attrs": {}},
+            {"op": "Scale", "inputs": [scores], "outputs": [scaled], "attrs": {"scale": scale}},
+            {"op": "Softmax", "inputs": [scaled], "outputs": [attn], "attrs": {}},
+            {"op": "BatchedMatMul", "inputs": [attn, Vh], "outputs": [ctx], "attrs": {}},
+            {"op": "Transpose", "inputs": [ctx], "outputs": [ctxT], "attrs": {"perm": [1, 0, 2]}},
+            {"op": "Reshape", "inputs": [ctxT], "outputs": [ctxM], "attrs": {"shape": [S, D]}},
+            {"op": "MatMul", "inputs": [ctxM, w("Wo")], "outputs": [ao], "attrs": {}},
+            {"op": "Add", "inputs": [xin, ao], "outputs": [x1], "attrs": {}},
+            {"op": "LayerNorm", "inputs": [x1, w("ln2_g"), w("ln2_b")], "outputs": [h2], "attrs": {"eps": eps}},
+            {"op": "MatMul", "inputs": [h2, w("W1")], "outputs": [m1], "attrs": {}},
+            {"op": "Add", "inputs": [m1, w("b1")], "outputs": [m1b], "attrs": {}},
+            {"op": "GeluTanh", "inputs": [m1b], "outputs": [gact], "attrs": {}},
+            {"op": "MatMul", "inputs": [gact, w("W2")], "outputs": [m2], "attrs": {}},
+            {"op": "Add", "inputs": [m2, w("b2")], "outputs": [m2b], "attrs": {}},
+            {"op": "Add", "inputs": [x1, m2b], "outputs": [xout], "attrs": {}},
+        ])
+
+    # Thread the residual stream through the layers; last layer writes "out".
+    prev = "x"
+    for i in range(n_layers):
+        is_last = i == n_layers - 1
+        xout = "out" if is_last else f"l{i}_out"
+        T(xout, [S, D], "output" if is_last else "intermediate")
+        emit_layer(i, prev, xout)
+        prev = xout
+
+    topo = {"name": "gpt2_block", "weights_file": "gpt2_block.bin",
+            "tensors": tensors, "nodes": nodes, "inputs": ["x"], "outputs": ["out"]}
+
+    with open(os.path.join(MODELS_DIR, "gpt2_block.json"), "w") as f:
+        json.dump(topo, f, indent=2)
+    with open(os.path.join(MODELS_DIR, "gpt2_block.bin"), "wb") as f:
+        f.write(blob)
+    print(f"wrote gpt2_block.json + gpt2_block.bin "
+          f"({len(blob)} bytes, {n_layers} layers)")
+
+
 if __name__ == "__main__":
     main()
     export_transformer()
+    export_gpt2()

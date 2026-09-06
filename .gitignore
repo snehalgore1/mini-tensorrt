@@ -17,6 +17,12 @@ models/*.onnx
 # ...except the small model fixtures: committed so the C++ test suite needs no Python (D8)
 !models/mlp.bin
 !models/transformer.bin
+# The GPT-2-scale block is large (~57 MB weights, ~MB goldens): regenerate, don't commit.
+models/gpt2_block.json
+models/goldens/gpt2_*.npy
+# Real GPT-2 124M (~500 MB weights + large logit goldens): regenerate, don't commit.
+models/gpt2_124m.json
+models/goldens/gpt2_124m_*.npy
 
 # profiling / benchmark output (regenerable)
 *.trace.json

@@ -87,9 +87,25 @@ inline NpyArray load_npy(const std::string& path) {
   return arr;
 }
 
+inline std::string golden_path(const std::string& name) {
+  return std::string(MTRT_GOLDENS_DIR) + "/" + name + ".npy";
+}
+
 // Load a golden fixture by base name from the compiled-in goldens directory.
 inline NpyArray load_golden(const std::string& name) {
-  return load_npy(std::string(MTRT_GOLDENS_DIR) + "/" + name + ".npy");
+  return load_npy(golden_path(name));
+}
+
+// True if a file exists and is readable. Used to skip tests for large, gitignored
+// fixtures (e.g. the GPT-2 block) that are only present after running the Python
+// export/golden scripts, so the committed suite still builds and runs without them.
+inline bool file_exists(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  return static_cast<bool>(f);
+}
+
+inline bool golden_exists(const std::string& name) {
+  return file_exists(golden_path(name));
 }
 
 // Build a contiguous owning FP32 Tensor from an NpyArray.

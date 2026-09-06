@@ -37,6 +37,7 @@ add_library(mtrt STATIC
   src/ops/kernels_activation.cpp
   src/ops/kernels_fused.cpp
   src/ops/kernels_transformer.cpp
+  src/ops/kernels_gpt.cpp
   src/memory/memory_planner.cpp
   src/optimizer/fusion.cpp
   src/optimizer/const_fold.cpp
@@ -59,7 +60,8 @@ if(MTRT_SANITIZERS)
   target_link_options(mtrt PUBLIC -fsanitize=address,undefined)
 endif()
 
-# --- tests ------------------------------------------------------------------
+# --- tools & benchmarks -----------------------------------------------------
+add_subdirectory(tools)
 add_subdirectory(benchmarks)
 
 enable_testing()
