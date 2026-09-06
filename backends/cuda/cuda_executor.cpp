@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 
 #include "backends/cuda/kernels.h"
+#include "mtrt/memory/memory_planner.h"
 #include "mtrt/tensor.h"
 
 namespace mtrt::cuda {
@@ -36,11 +37,30 @@ CudaExecutor::CudaExecutor(const frontend::LoadedModel& m) : m_(m) {
   const int64_t nt = m_.graph.num_tensors();
   d_.assign(static_cast<size_t>(nt), nullptr);
   bytes_.assign(static_cast<size_t>(nt), 0);
+  owned_.assign(static_cast<size_t>(nt), false);
+
+  // Plan all intermediates into one device arena (greedy planner, reused from the
+  // CPU path). Non-intermediates (weights, input, output) keep their own buffers,
+  // exactly as the CPU executor excludes them from planning.
+  const MemoryPlan plan = plan_memory(m_.graph);
+  CE_CK(cudaMalloc(&arena_, static_cast<size_t>(plan.total_bytes > 0 ? plan.total_bytes : 1)));
+
+  int64_t naive_sum = 0, naive_count = 0;
   for (TensorId id = 0; id < nt; ++id) {
     const TensorInfo& t = m_.graph.tensor(id);
     const int64_t nb = numel(t.shape) * static_cast<int64_t>(dtype_size(t.dtype));
     bytes_[static_cast<size_t>(id)] = nb;
+
+    if (t.kind == TensorKind::kIntermediate) {
+      d_[static_cast<size_t>(id)] =
+          static_cast<char*>(arena_) + plan.offset.at(id);  // view into the arena
+      naive_sum += nb;
+      ++naive_count;
+      continue;
+    }
+    // Own buffer for weights / input / output.
     CE_CK(cudaMalloc(&d_[static_cast<size_t>(id)], static_cast<size_t>(nb)));
+    owned_[static_cast<size_t>(id)] = true;
     auto it = m_.weights.find(id);
     if (it != m_.weights.end()) {
       const Tensor& w = it->second;
@@ -51,11 +71,14 @@ CudaExecutor::CudaExecutor(const frontend::LoadedModel& m) : m_(m) {
                        cudaMemcpyHostToDevice));
     }
   }
+  stats_ = DeviceMemStats{naive_sum, naive_count, plan.total_bytes,
+                          naive_sum - plan.total_bytes};
 }
 
 CudaExecutor::~CudaExecutor() {
-  for (void* p : d_)
-    if (p) cudaFree(p);
+  for (size_t i = 0; i < d_.size(); ++i)
+    if (owned_[i] && d_[i]) cudaFree(d_[i]);  // intermediates are views into arena_
+  if (arena_) cudaFree(arena_);
 }
 
 std::vector<float> CudaExecutor::run(const void* input_host) {

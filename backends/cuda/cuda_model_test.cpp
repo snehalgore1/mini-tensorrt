@@ -110,6 +110,14 @@ int main() {
     const double gpu_ms = trun([&] { ce.run(ids.data<int32_t>()); }, 20);
     std::printf("[RESULTS] GPT-2 124M forward latency (S=%lld): cpu=%.1f ms, gpu=%.1f ms, "
                 "speedup=%.1fx\n", (long long)S, cpu_ms, gpu_ms, cpu_ms / gpu_ms);
+
+    const cuda::DeviceMemStats ms = ce.memory_stats();
+    const double mb = 1.0 / (1024.0 * 1024.0);
+    std::printf("[RESULTS] GPT-2 124M GPU intermediate memory: naive %.1f MB / %lld allocs "
+                "-> arena %.1f MB / 1 alloc (%.1f MB reused, %.0f%%)\n",
+                ms.naive_peak_bytes * mb, (long long)ms.naive_alloc_count,
+                ms.arena_bytes * mb, ms.bytes_reused * mb,
+                100.0 * ms.bytes_reused / ms.naive_peak_bytes);
   } else {
     std::printf("[CUDA-MODEL] gpt2_124m      SKIP  (export it: "
                 "python python/export_gpt2_hf.py --seq-len 64)\n");
