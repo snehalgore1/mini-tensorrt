@@ -93,6 +93,114 @@ void matmul(const float* A, const float* B, float* C, int M, int N, int K) {
   }
 }
 
+// ---- M2: LayerNorm, CausalSoftmax, Transpose, Reshape, BatchedMatMul, Gather --
+
+namespace {
+// One thread per row (correctness-first; D is small, e.g. 768).
+__global__ void layernorm_k(const float* x, const float* g, const float* b,
+                            float* y, int rows, int D, float eps) {
+  const int r = blockIdx.x * blockDim.x + threadIdx.x;
+  if (r >= rows) return;
+  const float* row = x + (size_t)r * D;
+  float* orow = y + (size_t)r * D;
+  float mean = 0.f;
+  for (int j = 0; j < D; ++j) mean += row[j];
+  mean /= D;
+  float var = 0.f;
+  for (int j = 0; j < D; ++j) { const float c = row[j] - mean; var += c * c; }
+  var /= D;
+  const float inv = rsqrtf(var + eps);
+  for (int j = 0; j < D; ++j) orow[j] = (row[j] - mean) * inv * g[j] + b[j];
+}
+
+__global__ void causal_softmax_k(const float* x, float* y, int rows, int Sq, int Sk) {
+  const int r = blockIdx.x * blockDim.x + threadIdx.x;
+  if (r >= rows) return;
+  const int q = r % Sq;                 // query index within its [Sq,Sk] block
+  const float* row = x + (size_t)r * Sk;
+  float* orow = y + (size_t)r * Sk;
+  const int valid = q + 1;              // keys 0..q visible
+  float m = row[0];
+  for (int j = 1; j < valid; ++j) m = row[j] > m ? row[j] : m;
+  float sum = 0.f;
+  for (int j = 0; j < valid; ++j) { const float e = expf(row[j] - m); orow[j] = e; sum += e; }
+  const float inv = 1.f / sum;
+  for (int j = 0; j < valid; ++j) orow[j] *= inv;
+  for (int j = valid; j < Sk; ++j) orow[j] = 0.f;
+}
+
+struct TMeta { int rank; int in_strides[8]; int out_shape[8]; int perm[8]; };
+
+__global__ void transpose_k(const float* x, float* y, TMeta t, int numel) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= numel) return;
+  int rem = idx, in_off = 0;
+  for (int k = t.rank - 1; k >= 0; --k) {
+    const int c = rem % t.out_shape[k];
+    rem /= t.out_shape[k];
+    in_off += c * t.in_strides[t.perm[k]];
+  }
+  y[idx] = x[in_off];
+}
+
+__global__ void gather_k(const float* table, const int* ids, float* out, int T, int D) {
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= T * D) return;
+  const int t = i / D, dcol = i % D;
+  out[i] = table[(size_t)ids[t] * D + dcol];
+}
+}  // namespace
+
+void layernorm(const float* x, const float* g, const float* b, float* y,
+               int rows, int D, float eps) {
+  layernorm_k<<<blocks(rows), kThreads>>>(x, g, b, y, rows, D, eps);
+  CUDA_CK(cudaGetLastError());
+}
+
+void causal_softmax(const float* x, float* y, int rows, int Sq, int Sk) {
+  causal_softmax_k<<<blocks(rows), kThreads>>>(x, y, rows, Sq, Sk);
+  CUDA_CK(cudaGetLastError());
+}
+
+void transpose(const float* x, float* y, const int* in_shape, const int* perm,
+               int rank, int numel) {
+  TMeta t{};
+  t.rank = rank;
+  // Contiguous strides of the input, and the output shape (in_shape[perm[k]]).
+  int in_str[8];
+  in_str[rank - 1] = 1;
+  for (int k = rank - 2; k >= 0; --k) in_str[k] = in_str[k + 1] * in_shape[k + 1];
+  for (int k = 0; k < rank; ++k) {
+    t.in_strides[k] = in_str[k];
+    t.perm[k] = perm[k];
+    t.out_shape[k] = in_shape[perm[k]];
+  }
+  transpose_k<<<blocks(numel), kThreads>>>(x, y, t, numel);
+  CUDA_CK(cudaGetLastError());
+}
+
+void reshape(const float* x, float* y, int numel) {
+  CUDA_CK(cudaMemcpy(y, x, (size_t)numel * sizeof(float), cudaMemcpyDeviceToDevice));
+}
+
+void batched_matmul(const float* A, const float* B, float* C, int batch, int M,
+                    int N, int K) {
+  const float alpha = 1.0f, beta = 0.0f;
+  const cublasStatus_t st = cublasSgemmStridedBatched(
+      handle(), CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha,
+      B, N, (long long)K * N, A, K, (long long)M * K, &beta,
+      C, N, (long long)M * N, batch);
+  if (st != CUBLAS_STATUS_SUCCESS) {
+    std::fprintf(stderr, "cublasSgemmStridedBatched failed: %d\n", (int)st);
+    std::abort();
+  }
+}
+
+void gather(const float* table, const int* ids, float* out, int T, int D) {
+  gather_k<<<blocks(T * D), kThreads>>>(table, ids, out, T, D);
+  CUDA_CK(cudaGetLastError());
+}
+
 void shutdown() {
   if (g_handle) { cublasDestroy(g_handle); g_handle = nullptr; }
 }

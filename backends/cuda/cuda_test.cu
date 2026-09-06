@@ -40,6 +40,12 @@ std::vector<float> download(const float* d, int64_t n) {
   CK(cudaMemcpy(h.data(), d, (size_t)n * sizeof(float), cudaMemcpyDeviceToHost));
   return h;
 }
+int* upload_i32(const std::vector<int>& h) {
+  int* d = nullptr;
+  CK(cudaMalloc(&d, h.size() * sizeof(int)));
+  CK(cudaMemcpy(d, h.data(), h.size() * sizeof(int), cudaMemcpyHostToDevice));
+  return d;
+}
 
 void check(const std::string& name, const std::vector<float>& got,
            const std::vector<float>& exp, float atol = 1e-4f, float rtol = 1e-5f) {
@@ -108,6 +114,72 @@ int main() {
     CK(cudaDeviceSynchronize());
     check("MatMul", download(dc, (int64_t)M * N), o.data);
     cudaFree(da); cudaFree(db); cudaFree(dc);
+  }
+
+  // LayerNorm over last dim (eps 1e-5).
+  {
+    NpyArray x = load_golden("op_layernorm_in"), g = load_golden("op_layernorm_gamma"),
+             b = load_golden("op_layernorm_beta"), o = load_golden("op_layernorm_out");
+    const int D = (int)x.shape[1], rows = (int)x.shape[0];
+    float *dx = upload(x.data), *dg = upload(g.data), *db = upload(b.data), *dy;
+    CK(cudaMalloc(&dy, x.data.size() * sizeof(float)));
+    mtrt::cuda::layernorm(dx, dg, db, dy, rows, D, 1e-5f);
+    check("LayerNorm", download(dy, x.numel()), o.data);
+    cudaFree(dx); cudaFree(dg); cudaFree(db); cudaFree(dy);
+  }
+  // CausalSoftmax over a [2,4,4] score tensor.
+  {
+    NpyArray x = load_golden("op_causalsoftmax_in"), o = load_golden("op_causalsoftmax_out");
+    const int Sk = (int)x.shape[2], Sq = (int)x.shape[1];
+    const int rows = (int)(x.numel() / Sk);
+    float* dx = upload(x.data); float* dy;
+    CK(cudaMalloc(&dy, x.data.size() * sizeof(float)));
+    mtrt::cuda::causal_softmax(dx, dy, rows, Sq, Sk);
+    check("CausalSoftmax", download(dy, x.numel()), o.data);
+    cudaFree(dx); cudaFree(dy);
+  }
+  // Transpose [2,3,4] perm (1,0,2) -> [3,2,4].
+  {
+    NpyArray x = load_golden("op_transpose_in"), o = load_golden("op_transpose_out");
+    int in_shape[3] = {(int)x.shape[0], (int)x.shape[1], (int)x.shape[2]};
+    int perm[3] = {1, 0, 2};
+    float* dx = upload(x.data); float* dy;
+    CK(cudaMalloc(&dy, x.data.size() * sizeof(float)));
+    mtrt::cuda::transpose(dx, dy, in_shape, perm, 3, (int)x.numel());
+    check("Transpose", download(dy, x.numel()), o.data);
+    cudaFree(dx); cudaFree(dy);
+  }
+  // Reshape [2,6] -> [3,4] (same bytes).
+  {
+    NpyArray x = load_golden("op_reshape_in"), o = load_golden("op_reshape_out");
+    float* dx = upload(x.data); float* dy;
+    CK(cudaMalloc(&dy, x.data.size() * sizeof(float)));
+    mtrt::cuda::reshape(dx, dy, (int)x.numel());
+    check("Reshape", download(dy, x.numel()), o.data);
+    cudaFree(dx); cudaFree(dy);
+  }
+  // BatchedMatMul [2,3,4] @ [2,4,5] -> [2,3,5].
+  {
+    NpyArray a = load_golden("op_bmm_a"), b = load_golden("op_bmm_b"), o = load_golden("op_bmm_out");
+    const int batch = (int)a.shape[0], M = (int)a.shape[1], K = (int)a.shape[2], N = (int)b.shape[2];
+    float *da = upload(a.data), *db = upload(b.data), *dc;
+    CK(cudaMalloc(&dc, (size_t)batch * M * N * sizeof(float)));
+    mtrt::cuda::batched_matmul(da, db, dc, batch, M, N, K);
+    CK(cudaDeviceSynchronize());
+    check("BatchedMatMul", download(dc, (int64_t)batch * M * N), o.data);
+    cudaFree(da); cudaFree(db); cudaFree(dc);
+  }
+  // Gather: table[10,4], ids {3,1,4,1,5} (in sync with gen_goldens GATHER_IDS).
+  {
+    NpyArray table = load_golden("op_gather_table"), o = load_golden("op_gather_out");
+    const int D = (int)table.shape[1], T = 5;
+    float* dt = upload(table.data);
+    int* di = upload_i32({3, 1, 4, 1, 5});
+    float* dy;
+    CK(cudaMalloc(&dy, (size_t)T * D * sizeof(float)));
+    mtrt::cuda::gather(dt, di, dy, T, D);
+    check("Gather", download(dy, (int64_t)T * D), o.data);
+    cudaFree(dt); cudaFree(di); cudaFree(dy);
   }
 
   mtrt::cuda::shutdown();

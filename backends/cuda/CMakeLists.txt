@@ -8,6 +8,8 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 75)
 endif()
+# sm_75 (T4) is still fully supported; silence nvcc's forward-looking deprecation note.
+add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets>)
 
 # GPU kernel library (device tensor + kernels + cuBLAS matmul), reused by the
 # tests now and the CudaExecutor later.

@@ -21,6 +21,30 @@ void gelu_tanh(const float* x, float* out, int n);
 // C[M,N] = A[M,K] @ B[K,N] via cuBLAS (SGEMM). Row-major inputs/outputs.
 void matmul(const float* A, const float* B, float* C, int M, int N, int K);
 
+// LayerNorm over the last dim: out = (x-mean)/sqrt(var+eps)*gamma + beta, biased
+// variance (÷D), matching PyTorch. x is [rows, D]; gamma/beta are [D].
+void layernorm(const float* x, const float* gamma, const float* beta, float* out,
+               int rows, int D, float eps);
+
+// Causal (masked) softmax over the last dim of a [.., Sq, Sk] score tensor:
+// for query row q, key j>q is masked. rows = numel/Sk, Sq==Sk.
+void causal_softmax(const float* x, float* out, int rows, int Sq, int Sk);
+
+// n-d transpose: out[k] = in[perm[k]]. in_shape/perm are host arrays of length
+// rank (<=8). numel = product(in_shape).
+void transpose(const float* x, float* out, const int* in_shape, const int* perm,
+               int rank, int numel);
+
+// Contiguous reshape: same bytes, new shape (a device-to-device copy).
+void reshape(const float* x, float* out, int numel);
+
+// Batched matmul: A[B,M,K] @ B[B,K,N] -> C[B,M,N] via cuBLAS strided-batched.
+void batched_matmul(const float* A, const float* Bmat, float* C, int batch, int M,
+                    int N, int K);
+
+// Embedding gather: out[t,:] = table[ids[t],:]. table [V,D] (f32), ids [T] (i32).
+void gather(const float* table, const int* ids, float* out, int T, int D);
+
 // Free the shared cuBLAS handle (optional; process teardown).
 void shutdown();
 
