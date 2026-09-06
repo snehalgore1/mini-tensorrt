@@ -5,5 +5,8 @@ target_compile_definitions(bench_model PRIVATE
 target_compile_options(bench_model PRIVATE -Wall -Wextra)
 
 add_executable(bench_gemm bench_gemm.cpp)
-target_link_libraries(bench_gemm PRIVATE mtrt "-framework Accelerate")
+target_link_libraries(bench_gemm PRIVATE mtrt)
+if(APPLE)  # Accelerate (cblas_sgemm) reference is macOS-only; off macOS the column is n/a.
+  target_link_libraries(bench_gemm PRIVATE "-framework Accelerate")
+endif()
 target_compile_options(bench_gemm PRIVATE -Wall -Wextra)

@@ -10,6 +10,9 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(MTRT_SANITIZERS "Enable ASan/UBSan" OFF)
+# GPU backend. OFF by default so the macOS/CPU build is completely unaffected; ON
+# is used on a CUDA machine (e.g. Colab). All CUDA code lives under backends/cuda/.
+option(MTRT_CUDA "Build the CUDA GPU backend" OFF)
 
 include(FetchContent)
 
@@ -58,6 +61,12 @@ target_compile_options(mtrt PRIVATE -Wall -Wextra)
 if(MTRT_SANITIZERS)
   target_compile_options(mtrt PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
   target_link_options(mtrt PUBLIC -fsanitize=address,undefined)
+endif()
+
+# --- CUDA backend (only when MTRT_CUDA=ON) ----------------------------------
+if(MTRT_CUDA)
+  enable_language(CUDA)
+  add_subdirectory(backends/cuda)
 endif()
 
 # --- tools & benchmarks -----------------------------------------------------

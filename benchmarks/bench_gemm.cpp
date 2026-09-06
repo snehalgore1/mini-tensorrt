@@ -5,7 +5,9 @@
 //   ./build/benchmarks/bench_gemm [--sizes 256,512,1024,2048] [--reps 5]
 //                                 [--threads N] [--out gemm_results.json]
 
-#include <Accelerate/Accelerate.h>
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>  // cblas_sgemm reference (Apple only)
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -168,6 +170,7 @@ int main(int argc, char** argv) {
       results[vi][si] = g;
       printf("%10.1f", g);
     }
+#ifdef __APPLE__
     const double ag = bench_gflops(
         [&] {
           cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, n, n, n, 1.0f,
@@ -176,6 +179,10 @@ int main(int argc, char** argv) {
         flops);
     accel[si] = ag;
     printf("%12.1f\n", ag);
+#else
+    accel[si] = 0.0;  // Accelerate is Apple-only; column is n/a off macOS.
+    printf("%12s\n", "n/a");
+#endif
   }
 
   // Write JSON results for the plotter.
