@@ -119,10 +119,25 @@ NEON vs Accelerate. `bench_gemm_cuda`.
 | CPU executor | 1499.8 ms |
 | CUDA executor (T4) | **21.7 ms** |
 
-Real GPT-2 runs in **~22 ms on the T4**, a **69×** speedup here. Honest caveat: the CPU
+Real GPT-2 runs in **~22 ms on the T4**, a **~60–70×** speedup here. Honest caveat: the CPU
 baseline is Colab's x86 CPU running the *portable scalar-fallback* GEMM — the tuned NEON
 path is arm64-only — so this ratio flatters the GPU; on an arm64 SIMD CPU the gap narrows.
 The GPU latency itself is the headline number. Measured by `cuda_model_test`.
+
+### GPU memory arena
+
+The device analogue of the CPU memory planner: instead of one `cudaMalloc` per
+intermediate, the `CudaExecutor` packs all intermediates into a single device arena at
+planned offsets, reusing space between tensors with disjoint lifetimes (safe — kernels run
+in topo order on one stream).
+
+| Configuration (real GPT-2 124M, S=64) | Peak intermediate mem | Allocations |
+|---|---|---|
+| Naive (one `cudaMalloc` per intermediate) | 88.5 MB | 364 |
+| Greedy device arena | **1.7 MB** | **1** |
+
+**86.8 MB reused, a 98% reduction** — and the whole model still produces identical tokens
+(`argmax_mism=0`), so the reuse preserves numerics on the GPU. Measured by `cuda_model_test`.
 
 ---
 
