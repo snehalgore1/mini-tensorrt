@@ -324,6 +324,32 @@ quantization — future work. Reproduce: `python python/quantize_gpt2.py`.
 
 ---
 
+## FlashAttention — fused attention with online softmax (F)
+
+A single fused kernel computes `softmax(scale·QKᵀ + causal_mask)·V` with **online
+(streaming) softmax**, never materializing the `[H,S,S]` score matrix — it keeps a running
+max, denominator, and weighted output per query, rescaling on the fly. It replaces the
+BatchedMatMul → Scale → CausalSoftmax → BatchedMatMul chain (and the K transpose) with one
+op. Golden-tested against PyTorch `scaled_dot_product_attention` (`Golden.FlashAttention`).
+
+On real GPT-2 the fused model produces **identical tokens** (argmax matches the standard
+model at every position, max logit diff ~1e-3 from online-softmax reassociation). The memory
+win is O(S²) scratch removed, so it **grows with sequence length**:
+
+| Seq len S | standard peak | FlashAttention peak | reduction |
+|---|---|---|---|
+| 64 | 1.69 MB | 1.69 MB | 0% |
+| 256 | 7.5 MB | 6.75 MB | 10% |
+| 512 | 27 MB | **13.5 MB** | **50%** |
+
+The honest reading: at short S the `[S,3072]` FFN activations set the peak, so removing the
+smaller `[H,S,S]` attention scratch changes nothing; once S is large enough that the O(S²)
+scratch dominates (long context), FlashAttention roughly halves peak memory — which is
+exactly the regime it exists for. Enable with `export_gpt2_hf.py --flash`; measured by
+`Gpt2Real.FlashAttentionMatchesAndSavesMemory`. A GPU FlashAttention kernel is the next step.
+
+---
+
 ## Full benchmark matrix (Week 8)
 
 | System | p50 (ms) | p95 (ms) | Peak mem | Notes |

@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 #include "kernels.h"
 #include "mtrt/support/assert.h"
@@ -99,12 +100,72 @@ void causal_softmax_f32(const OpContext& ctx) {
   }
 }
 
+// FlashAttention-style fused causal attention with online (streaming) softmax:
+//   out[H,S,d] = softmax(scale * Q Kᵀ + causal_mask) @ V
+// computed WITHOUT ever materializing the [H,S,S] score matrix. For each query it
+// streams over keys, keeping a running max m, running denominator l, and running
+// weighted output acc, rescaling on the fly (the online-softmax trick). This is the
+// memory win -- attention scratch drops from O(S²) to O(d) per query -- and the
+// fusion that flash attention is built on. Inputs Q,K,V [H,S,d]; attr scale (double).
+void flash_attention_f32(const OpContext& ctx) {
+  MTRT_ASSERT(ctx.inputs.size() == 3, "FlashAttention expects Q, K, V");
+  MTRT_ASSERT(ctx.outputs.size() == 1, "FlashAttention expects 1 output");
+  const Tensor& Q = *ctx.inputs[0];
+  const Tensor& K = *ctx.inputs[1];
+  const Tensor& V = *ctx.inputs[2];
+  Tensor& O = *ctx.outputs[0];
+  MTRT_ASSERT(Q.rank() == 3 && K.rank() == 3 && V.rank() == 3, "FlashAttention rank 3");
+  MTRT_ASSERT(Q.is_contiguous() && K.is_contiguous() && V.is_contiguous() &&
+                  O.is_contiguous(), "FlashAttention needs contiguous");
+
+  const int64_t H = Q.shape()[0];
+  const int64_t S = Q.shape()[1];
+  const int64_t d = Q.shape()[2];
+  const auto scale = static_cast<float>(std::get<double>(ctx.node.attrs.at("scale")));
+
+  const float* q = Q.data<float>();
+  const float* k = K.data<float>();
+  const float* v = V.data<float>();
+  float* o = O.data<float>();
+  std::vector<float> acc(static_cast<size_t>(d));
+
+  for (int64_t h = 0; h < H; ++h) {
+    const float* qh = q + h * S * d;
+    const float* kh = k + h * S * d;
+    const float* vh = v + h * S * d;
+    float* oh = o + h * S * d;
+    for (int64_t i = 0; i < S; ++i) {
+      const float* qi = qh + i * d;
+      float m = -INFINITY, l = 0.0f;
+      for (int64_t t = 0; t < d; ++t) acc[static_cast<size_t>(t)] = 0.0f;
+      for (int64_t j = 0; j <= i; ++j) {  // causal: keys 0..i
+        const float* kj = kh + j * d;
+        float s = 0.0f;
+        for (int64_t t = 0; t < d; ++t) s += qi[t] * kj[t];
+        s *= scale;
+        const float m_new = s > m ? s : m;
+        const float corr = std::exp(m - m_new);  // m=-inf on first j -> corr=0
+        const float p = std::exp(s - m_new);
+        l = l * corr + p;
+        const float* vj = vh + j * d;
+        for (int64_t t = 0; t < d; ++t)
+          acc[static_cast<size_t>(t)] = acc[static_cast<size_t>(t)] * corr + p * vj[t];
+        m = m_new;
+      }
+      const float inv = 1.0f / l;
+      float* oi = oh + i * d;
+      for (int64_t t = 0; t < d; ++t) oi[t] = acc[static_cast<size_t>(t)] * inv;
+    }
+  }
+}
+
 }  // namespace
 
 void register_gpt_kernels(KernelRegistry& registry) {
   registry.register_kernel("Gather", DType::kF32, &gather_f32);
   registry.register_kernel("GeluTanh", DType::kF32, &gelu_tanh_f32);
   registry.register_kernel("CausalSoftmax", DType::kF32, &causal_softmax_f32);
+  registry.register_kernel("FlashAttention", DType::kF32, &flash_attention_f32);
 }
 
 }  // namespace mtrt

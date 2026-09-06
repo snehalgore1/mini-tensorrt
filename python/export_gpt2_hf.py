@@ -86,9 +86,10 @@ def load_hf_gpt2():
     return conf, w, model
 
 
-def build_graph_and_blob(conf, w, seq_len):
+def build_graph_and_blob(conf, w, seq_len, flash=False):
     """Serialize weights to a blob and build the full LM graph for `seq_len`.
-    Returns (topo_dict, blob_bytes)."""
+    If flash, the attention subgraph is a single fused FlashAttention op (no
+    [H,S,S] scratch). Returns (topo_dict, blob_bytes)."""
     D, H, L, V, d, hidden = (conf["D"], conf["H"], conf["L"], conf["V"],
                              conf["d"], conf["hidden"])
     S = seq_len
@@ -157,8 +158,9 @@ def build_graph_and_blob(conf, w, seq_len):
         Q, K, Vv = iv("Q", [S, D]), iv("K", [S, D]), iv("V", [S, D])
         Qr, Kr, Vr = iv("Qr", [S, H, d]), iv("Kr", [S, H, d]), iv("Vr", [S, H, d])
         Qh, Kh, Vh = iv("Qh", [H, S, d]), iv("Kh", [H, S, d]), iv("Vh", [H, S, d])
-        KhT = iv("KhT", [H, d, S])
-        sc, scd, at = iv("sc", [H, S, S]), iv("scd", [H, S, S]), iv("at", [H, S, S])
+        if not flash:  # fused FlashAttention needs no [H,S,S] scratch
+            KhT = iv("KhT", [H, d, S])
+            sc, scd, at = iv("sc", [H, S, S]), iv("scd", [H, S, S]), iv("at", [H, S, S])
         ctx = iv("ctx", [H, S, d]); ctxT = iv("ctxT", [S, H, d]); ctxM = iv("ctxM", [S, D])
         ao, aob = iv("ao", [S, D]), iv("aob", [S, D])
         x1 = iv("x1", [S, D])
@@ -180,11 +182,16 @@ def build_graph_and_blob(conf, w, seq_len):
             {"op": "Transpose", "inputs": [Qr], "outputs": [Qh], "attrs": {"perm": [1, 0, 2]}},
             {"op": "Transpose", "inputs": [Kr], "outputs": [Kh], "attrs": {"perm": [1, 0, 2]}},
             {"op": "Transpose", "inputs": [Vr], "outputs": [Vh], "attrs": {"perm": [1, 0, 2]}},
+        ] + ([
+            # Fused attention: no [H,S,S] scores materialized (online softmax).
+            {"op": "FlashAttention", "inputs": [Qh, Kh, Vh], "outputs": [ctx], "attrs": {"scale": scale}},
+        ] if flash else [
             {"op": "Transpose", "inputs": [Kh], "outputs": [KhT], "attrs": {"perm": [0, 2, 1]}},
             {"op": "BatchedMatMul", "inputs": [Qh, KhT], "outputs": [sc], "attrs": {}},
             {"op": "Scale", "inputs": [sc], "outputs": [scd], "attrs": {"scale": scale}},
             {"op": "CausalSoftmax", "inputs": [scd], "outputs": [at], "attrs": {}},
             {"op": "BatchedMatMul", "inputs": [at, Vh], "outputs": [ctx], "attrs": {}},
+        ]) + [
             {"op": "Transpose", "inputs": [ctx], "outputs": [ctxT], "attrs": {"perm": [1, 0, 2]}},
             {"op": "Reshape", "inputs": [ctxT], "outputs": [ctxM], "attrs": {"shape": [S, D]}},
             {"op": "MatMul", "inputs": [ctxM, p+"Wo"], "outputs": [ao], "attrs": {}},
@@ -261,6 +268,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seq-len", type=int, default=16)
     ap.add_argument("--verify", action="store_true")
+    ap.add_argument("--flash", action="store_true",
+                    help="also write gpt2_124m_flash.json (fused FlashAttention)")
     args = ap.parse_args()
 
     os.makedirs(MODELS_DIR, exist_ok=True)
@@ -274,6 +283,14 @@ def main():
         f.write(blob)
     print(f"wrote gpt2_124m.json ({len(topo['nodes'])} nodes) + gpt2_124m.bin "
           f"({len(blob)/1e6:.1f} MB), seq_len={args.seq_len}")
+
+    if args.flash:
+        # Reuses the same weights blob; only the graph changes (fused attention).
+        topo_f, _ = build_graph_and_blob(conf, w, args.seq_len, flash=True)
+        with open(os.path.join(MODELS_DIR, "gpt2_124m_flash.json"), "w") as f:
+            json.dump(topo_f, f)
+        print(f"wrote gpt2_124m_flash.json ({len(topo_f['nodes'])} nodes, "
+              f"fused FlashAttention; reuses gpt2_124m.bin)")
 
     # Whole-model golden: HF logits for a canonical id sequence (kept in sync with
     # tests/gpt2_real_test.cpp, which hardcodes ids = arange(10, 10+S)).

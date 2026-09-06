@@ -22,6 +22,7 @@ models/gpt2_block.json
 models/goldens/gpt2_*.npy
 # Real GPT-2 124M (~500 MB weights + large logit goldens): regenerate, don't commit.
 models/gpt2_124m.json
+models/gpt2_124m_flash.json
 models/goldens/gpt2_124m_*.npy
 
 # profiling / benchmark output (regenerable)

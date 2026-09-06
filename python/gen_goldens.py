@@ -147,6 +147,17 @@ def gen_gpt_op_goldens():
     save("op_causalsoftmax_in", to_f32(scores))
     save("op_causalsoftmax_out", to_f32(out))
 
+    # FlashAttention: fused causal attention out = softmax(scale*QK^T + mask) V.
+    H, S, d = 2, 5, 3
+    Q = torch.randn(H, S, d, generator=g)
+    K = torch.randn(H, S, d, generator=g)
+    V = torch.randn(H, S, d, generator=g)
+    fa = F.scaled_dot_product_attention(Q, K, V, is_causal=True)  # scale=1/sqrt(d)
+    save("op_flashattn_q", to_f32(Q))
+    save("op_flashattn_k", to_f32(K))
+    save("op_flashattn_v", to_f32(V))
+    save("op_flashattn_out", to_f32(fa))
+
 
 def gen_gpt2_model_goldens():
     """Whole-model golden for the stacked GPT-2 block. Large (S*D floats) and

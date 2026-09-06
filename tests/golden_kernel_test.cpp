@@ -142,6 +142,16 @@ TEST(Golden, CausalSoftmax) {
   ExpectGolden(out, load_golden("op_causalsoftmax_out"));
 }
 
+TEST(Golden, FlashAttention) {
+  Tensor Q = tensor_from_npy(load_golden("op_flashattn_q"));  // [2,5,3]
+  Tensor K = tensor_from_npy(load_golden("op_flashattn_k"));
+  Tensor V = tensor_from_npy(load_golden("op_flashattn_v"));
+  Tensor out = Tensor::owning(DType::kF32, Q.shape());
+  const double scale = 1.0 / std::sqrt(3.0);  // d = 3
+  run_kernel_attrs("FlashAttention", {&Q, &K, &V}, out, {{"scale", scale}});
+  ExpectGolden(out, load_golden("op_flashattn_out"), kDefaultRtol, 1e-5f);
+}
+
 TEST(Golden, MatMulQ) {
   // A @ B, with B symmetric per-channel (per column) INT8-quantized -- the
   // weight-only INT8 path used for real GPT-2.
