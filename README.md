@@ -93,6 +93,15 @@ Incremental decode caches each layer's K/V instead of recomputing the whole grap
 **1.87× faster generation with byte-identical output**, verified against the full-recompute
 path (`run_gpt2 --mode bench`).
 
+### Runs on a GPU too (CUDA)
+
+The same `Graph` IR runs on a CUDA backend (all gated behind `-DMTRT_CUDA=ON`; the CPU build
+is untouched). A `CudaExecutor` uploads weights once and dispatches each node to a CUDA
+kernel (elementwise/LayerNorm/CausalSoftmax/Gather hand-written; matmul via cuBLAS). On a
+Tesla T4, **real GPT-2 124M runs end to end on the GPU and produces the same next-token
+predictions as the CPU** (0 argmax mismatches, max logit error 3.97e-4). See `colab/README.md`
+to reproduce.
+
 ### Per-operator profile
 
 The profiler emits Chrome Trace Event JSON (viewable in
@@ -109,9 +118,9 @@ to be complete. Dynamic shapes, training, and broad operator coverage are out of
 
 ## What I would build next in a production runtime
 
-- **A GPU backend (CUDA).** The CPU path is the reference oracle; the next step is a tiled
-  shared-memory GEMM and a device executor, validated against this CPU model, with an honest
-  roofline vs cuBLAS.
+- **A tuned GPU GEMM.** The CUDA backend runs real GPT-2 on the GPU (matmul via cuBLAS); the
+  next step is a hand-written tiled shared-memory kernel with an honest roofline vs cuBLAS,
+  and a CPU-vs-GPU latency comparison.
 - **Quantization (INT8 / FP16).** The FP32 path establishes correctness; INT8 with INT32
   accumulation (and an accuracy-vs-speed table on real GPT-2) is the production tradeoff that
   matters most, and FP16/tensor-cores is the real GPU inference path.

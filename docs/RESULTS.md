@@ -76,6 +76,29 @@ Release; the incremental path reuses the tuned GEMM (`gemm_auto`) for its matvec
 
 ---
 
+## GPU backend — real GPT-2 on a CUDA GPU (#1)
+
+The runtime has a CUDA backend that runs a whole model on the GPU: weights uploaded
+once, one device buffer per tensor, each graph node dispatched to a CUDA kernel
+(elementwise/LayerNorm/CausalSoftmax/Transpose/Gather hand-written; MatMul and
+BatchedMatMul via cuBLAS). It reuses the frontend-agnostic `Graph` IR unchanged — the
+*same* graph runs on CPU or GPU. All CUDA is gated behind `-DMTRT_CUDA=ON`; the
+macOS/CPU build is untouched.
+
+| Check (Tesla T4, Colab, CUDA 12.8) | Result |
+|---|---|
+| Per-op golden tests on GPU (11 ops vs PyTorch) | all PASS (max err ≤ 4.8e-7) |
+| Tiny transformer block: GPU vs CPU | PASS (max err 7.2e-7) |
+| **Real GPT-2 124M: GPU vs CPU oracle** | **PASS — 0 argmax mismatches, max logit err 3.97e-4** |
+
+So real GPT-2 produces the same next-token predictions on the GPU as on the CPU (which
+matches HuggingFace). This is a **correctness** result; the GPU performance story
+(own tiled GEMM + roofline vs cuBLAS, CPU-vs-GPU latency) is measured next. Reproduce on
+Colab: see `colab/README.md`, then `cmake -B build -DMTRT_CUDA=ON && cmake --build build
+--target cuda_model_test && ./build/backends/cuda/cuda_model_test`.
+
+---
+
 ## Memory planning (Week 3)
 
 | Model | Configuration | Peak intermediate bytes | Alloc count | Bytes reused | Reduction |
