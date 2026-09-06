@@ -141,3 +141,25 @@ TEST(Golden, CausalSoftmax) {
   run_kernel("CausalSoftmax", {&in}, out);
   ExpectGolden(out, load_golden("op_causalsoftmax_out"));
 }
+
+TEST(Golden, MatMulQ) {
+  // A @ B, with B symmetric per-channel (per column) INT8-quantized -- the
+  // weight-only INT8 path used for real GPT-2.
+  Tensor A = tensor_from_npy(load_golden("op_matmul_a"));  // [2,3]
+  NpyArray B = load_golden("op_matmul_b");                 // [3,5]
+  const int K = static_cast<int>(B.shape[0]), N = static_cast<int>(B.shape[1]);
+  Tensor W = Tensor::owning(DType::kI8, B.shape);
+  Tensor s = Tensor::owning(DType::kF32, {static_cast<int64_t>(N)});
+  for (int j = 0; j < N; ++j) {
+    float amax = 0.0f;
+    for (int k = 0; k < K; ++k) amax = std::max(amax, std::abs(B.data[k * N + j]));
+    const float sc = amax / 127.0f;
+    s.data<float>()[j] = sc;
+    for (int k = 0; k < K; ++k)
+      W.data<int8_t>()[k * N + j] = static_cast<int8_t>(std::lround(B.data[k * N + j] / sc));
+  }
+  Tensor out = Tensor::owning(DType::kF32, {2, 5});
+  run_kernel("MatMulQ", {&A, &W, &s}, out);
+  // vs full-precision A@B, within a quantization-sized tolerance.
+  ExpectGolden(out, load_golden("op_matmul_out"), 0.05f, 0.05f);
+}

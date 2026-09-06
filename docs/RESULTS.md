@@ -295,6 +295,35 @@ the one honest lever over the AMX-bound Accelerate gap. Reproduce: `./build/benc
 
 ---
 
+## INT8 weight quantization (#5)
+
+Symmetric INT8 quantization of the matmul weight matrices (`Wq/Wk/Wv/Wo/Wfc/Wproj` +
+tied `lm_head`); embeddings, LayerNorm, and biases stay FP32. The runtime's `MatMulQ`
+kernel dequantizes the int8 weight in the inner loop (f32 accumulate) — golden-tested
+(`Golden.MatMulQ`).
+
+| | Size |
+|---|---|
+| Quantized weights (FP32 → INT8) | 494 MB → **124 MB** (4.0×) |
+| Full model | 652 MB → 282 MB (2.31×) |
+
+**Per-tensor vs per-channel** (max abs logit error vs FP32, real GPT-2 124M):
+
+| Scheme | mean logit err | max logit err |
+|---|---|---|
+| Per-tensor (one scale per matrix) | 8.98 | 22.3 |
+| **Per-channel (one scale per output column)** | **0.59** | **2.53** |
+
+The headline finding: **per-tensor INT8 wrecks GPT-2** (max logit error 22) because a single
+per-matrix scale is dominated by weight outliers, quantizing everything else near zero.
+**Per-channel scaling recovers it — 8.8× lower error** at the *same* 4× compression — which is
+why production transformer quantization is per-channel. Weight-only INT8 still perturbs logits
+(residual ~0.6 mean), motivating calibration / mixed precision / GPTQ as next steps. This is
+the accuracy/size half; a *speed* win needs INT8 SIMD (NEON `SDOT`) with activation
+quantization — future work. Reproduce: `python python/quantize_gpt2.py`.
+
+---
+
 ## Full benchmark matrix (Week 8)
 
 | System | p50 (ms) | p95 (ms) | Peak mem | Notes |

@@ -10,6 +10,7 @@ namespace mtrt {
 enum class DType {
   kF32,
   kI32,
+  kI8,  // symmetric per-tensor INT8 weights (with a companion f32 scale). #5.
 };
 
 inline std::size_t dtype_size(DType dt) {
@@ -18,6 +19,8 @@ inline std::size_t dtype_size(DType dt) {
       return 4;
     case DType::kI32:
       return 4;
+    case DType::kI8:
+      return 1;
   }
   return 0;
 }
@@ -28,6 +31,8 @@ inline const char* dtype_name(DType dt) {
       return "f32";
     case DType::kI32:
       return "i32";
+    case DType::kI8:
+      return "i8";
   }
   return "?";
 }

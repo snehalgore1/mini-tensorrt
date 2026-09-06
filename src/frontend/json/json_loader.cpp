@@ -16,6 +16,7 @@ using nlohmann::json;
 DType parse_dtype(const std::string& s) {
   if (s == "f32") return DType::kF32;
   if (s == "i32") return DType::kI32;  // integer index inputs (token/position ids)
+  if (s == "i8") return DType::kI8;    // symmetric per-tensor INT8 weights (#5)
   throw GraphError("unsupported dtype in JSON model: " + s);
 }
 
