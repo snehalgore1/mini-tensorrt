@@ -18,7 +18,6 @@
 
 namespace mtrt::cuda {
 namespace {
-using namespace nvcuda;
 
 #define FP16_CK(call)                                                        \
   do {                                                                       \
@@ -34,8 +33,14 @@ constexpr int WM = 16, WN = 16, WK = 16;
 
 // One warp computes one 16x16 output tile, accumulating over K in 16-wide steps.
 // A is row-major (lda=K), B is row-major (ldb=N); C is FP32 row-major (ldc=N).
+// The WMMA API (nvcuda::wmma, <mma.h>) is only defined for __CUDA_ARCH__ >= 700,
+// so it must be used inside the device pass only -- referencing it at file scope
+// (or in the host pass) fails to find the namespace. Guard the body accordingly;
+// the host pass sees an empty stub, the sm_75 device pass sees the tensor-core code.
 __global__ void wmma_gemm_k(const half* A, const half* B, float* C,
                             int M, int N, int K) {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 700)
+  using namespace nvcuda;
   const int warpM = (blockIdx.x * blockDim.x + threadIdx.x) / warpSize;
   const int warpN = blockIdx.y * blockDim.y + threadIdx.y;
   const int aRow = warpM * WM;
@@ -53,6 +58,9 @@ __global__ void wmma_gemm_k(const half* A, const half* B, float* C,
     wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
   }
   wmma::store_matrix_sync(C + (long)aRow * N + bCol, c_frag, N, wmma::mem_row_major);
+#else
+  (void)A; (void)B; (void)C; (void)M; (void)N; (void)K;
+#endif
 }
 
 cublasHandle_t g_fp16_handle = nullptr;
