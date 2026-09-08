@@ -25,12 +25,14 @@ are not reproducible.
 | Model | Reference | Max abs error | Max rel error | Tolerance | Pass |
 |---|---|---|---|---|---|
 | MLP | PyTorch eager | 2.98e-08 | 1.16e-07 | rtol 1e-5, atol 1e-5 | yes |
-| MLP | ONNX Runtime CPU | TBD | TBD | TBD | TBD |
+| MLP (loaded from `.onnx`) | ONNX Runtime CPU | 0 | 0 | rtol 1e-5, atol 1e-5 | yes |
 
-Measured by the `Model.MlpMatchesPyTorch` golden test (Release build, environment
-above). The MLP ends in Softmax, so atol is 1e-5 per CLAUDE.md; the observed error is
-at float32 rounding level. The ONNX Runtime row is TBD until `python/reference.py`
-wires that comparison.
+Measured by the `Model.MlpMatchesPyTorch` and `OnnxFrontend.MatchesOnnxRuntime` golden
+tests (Release build, environment above). The MLP ends in Softmax, so atol is 1e-5 per
+CLAUDE.md; the PyTorch error is at float32 rounding level. The ONNX row is now measured:
+the *same* `models/mlp.onnx` runs in both ONNX Runtime and MiniTensorRT (via the new ONNX
+frontend) and the outputs are **bit-identical** (max abs err 0) — see the ONNX frontend
+section below.
 
 ---
 
@@ -390,6 +392,33 @@ bottleneck. Both paths here run **batch=1** — the executor is single-input by 
 (static shapes, one sequence); batching independent sequences to raise decode utilization
 is the natural next step and would need a batch dimension threaded through the executor.
 The prefill path benefits directly from the tuned `MatMul`/`BatchedMatMul` above.
+
+---
+
+## ONNX frontend — a second real frontend (Week 6)
+
+The runtime now has a **second frontend** that ingests real `.onnx` files, alongside the
+JSON loader. This is the payoff of DESIGN D3: the internal IR was built frontend-agnostic,
+and a second real frontend *proves* it rather than asserting it. The ONNX loader parses the
+protobuf (vendored `onnx.proto` → `protoc`, gated behind `-DMTRT_ONNX=ON` so the core build
+needs no protobuf) into the exact same `Graph`/`Tensor` IR; nothing ONNX-specific escapes
+`onnx_loader.cpp`, and the *same* `Executor` and kernels run the result.
+
+| Check (`models/mlp.onnx`, MLP) | Result |
+|---|---|
+| MiniTensorRT (loaded from `.onnx`) vs **ONNX Runtime CPU** | **bit-identical**, max abs err **0** |
+| ONNX-loaded graph vs JSON-loaded graph, same executor | identical output (frontend-agnostic) |
+| Topology recovered from `.onnx` | 11 tensors, 6 nodes, 4 weights — matches the JSON MLP |
+
+The ONNX graph is emitted (`python/export_onnx.py`) with ops that map 1:1 onto our kernels
+(`MatMul`, `Add`, `Gelu`, `Softmax`), from the *same* seeded weights as the JSON export, so
+`mlp.onnx` and `mlp.json` are the identical function — which is why the two frontends produce
+identical output. The loader is a **strict subset**: an unmapped op or a dynamic/symbolic
+dimension throws with a clear message rather than silently misbehaving (shapes come from the
+file's `value_info`, populated by `onnx.shape_inference.infer_shapes` at export, honoring the
+static-shape invariant). Measured by `OnnxFrontend.*` (built only when `MTRT_ONNX=ON`).
+Conv/pooling operators and a CNN remain out of scope — the frontend-agnostic claim is proven
+without them.
 
 ---
 

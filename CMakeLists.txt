@@ -13,6 +13,9 @@ option(MTRT_SANITIZERS "Enable ASan/UBSan" OFF)
 # GPU backend. OFF by default so the macOS/CPU build is completely unaffected; ON
 # is used on a CUDA machine (e.g. Colab). All CUDA code lives under backends/cuda/.
 option(MTRT_CUDA "Build the CUDA GPU backend" OFF)
+# ONNX frontend. OFF by default so the core build needs no protobuf; ON adds a
+# second real frontend (needs protobuf: `brew install protobuf`). See DESIGN D3.
+option(MTRT_ONNX "Build the ONNX frontend (requires protobuf)" OFF)
 
 include(FetchContent)
 
@@ -67,6 +70,36 @@ endif()
 if(MTRT_CUDA)
   enable_language(CUDA)
   add_subdirectory(backends/cuda)
+endif()
+
+# --- ONNX frontend (only when MTRT_ONNX=ON) ---------------------------------
+# Generates onnx.pb.{h,cc} from the vendored schema with protoc, then builds the
+# loader into a separate mtrt_onnx lib so the core `mtrt` (and its consumers) stay
+# protobuf-free. The onnx.pb types never escape onnx_loader.cpp (invariant 2).
+if(MTRT_ONNX)
+  find_package(Protobuf CONFIG REQUIRED)
+  message(STATUS "MTRT_ONNX: protobuf ${Protobuf_VERSION}")
+  set(ONNX_PB_DIR ${CMAKE_BINARY_DIR}/onnx_gen)
+  file(MAKE_DIRECTORY ${ONNX_PB_DIR})
+  add_custom_command(
+    OUTPUT ${ONNX_PB_DIR}/onnx.pb.cc ${ONNX_PB_DIR}/onnx.pb.h
+    COMMAND protobuf::protoc
+    ARGS --cpp_out=${ONNX_PB_DIR}
+         -I ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnx onnx.proto
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/onnx/onnx.proto
+    COMMENT "protoc: generating onnx.pb.{h,cc}")
+
+  add_library(mtrt_onnx STATIC
+    ${ONNX_PB_DIR}/onnx.pb.cc
+    src/frontend/onnx/onnx_loader.cpp)
+  # Force protoc to run before onnx_loader.cpp compiles (it includes onnx.pb.h).
+  set_source_files_properties(src/frontend/onnx/onnx_loader.cpp PROPERTIES
+    OBJECT_DEPENDS ${ONNX_PB_DIR}/onnx.pb.h)
+  target_include_directories(mtrt_onnx PRIVATE ${ONNX_PB_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(mtrt_onnx PUBLIC mtrt PRIVATE protobuf::libprotobuf)
+  target_compile_definitions(mtrt_onnx PUBLIC MTRT_HAVE_ONNX)
+  # protoc-generated code is not warning-clean; don't fail the core's -Werror-ish flags on it.
+  target_compile_options(mtrt_onnx PRIVATE -w)
 endif()
 
 # --- tools & benchmarks -----------------------------------------------------

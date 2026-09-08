@@ -16,6 +16,11 @@ add_executable(mtrt_tests
   gpt2_real_test.cpp
   gemm_test.cpp)
 
+if(MTRT_ONNX)
+  target_sources(mtrt_tests PRIVATE onnx_frontend_test.cpp)
+  target_link_libraries(mtrt_tests PRIVATE mtrt_onnx)
+endif()
+
 target_link_libraries(mtrt_tests PRIVATE mtrt GTest::gtest_main)
 # So tests can include "tests/support/..." helpers.
 target_include_directories(mtrt_tests PRIVATE ${CMAKE_SOURCE_DIR})
