@@ -3,8 +3,9 @@
 **Current week: 8** (Weeks 1–5 done; Week 7 did *both* CUDA and INT8; Week 6 ONNX
 frontend done for the transformer op set — loads real `.onnx`, matches ONNX Runtime,
 proves the IR is frontend-agnostic — with only Conv/CNN left out of scope. Stretch work
-beyond the roadmap: GEMM autotuning, FlashAttention, BatchedMatMul tuning, prefill/decode
-throughput. All measured in `docs/RESULTS.md`.)
+beyond the roadmap: GEMM autotuning, FlashAttention (CPU + a CUDA T4 kernel), a WMMA FP16
+tensor-core GEMM, BatchedMatMul tuning, prefill/decode throughput. All measured in
+`docs/RESULTS.md`.)
 
 Each week has a hard "definition of done." Do not start the next week until the current
 week's DoD is met and its results are recorded. Weeks 1 through 4 are the core; the

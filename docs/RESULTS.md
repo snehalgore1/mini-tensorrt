@@ -155,27 +155,39 @@ against the *same* PyTorch golden as the CPU kernel (`op_flashattn_*`).
 So the fused online-softmax attention produces the same result on the GPU as PyTorch's
 reference, at float32 rounding level. Measured by `./build/backends/cuda/cuda_test`.
 
-### FP16 tensor cores (H) — pending correct-arch Colab rebuild
+### FP16 tensor cores (H) — measured on a Colab T4
 
 **H — FP16 tensor-core GEMM** (`backends/cuda/gemm_fp16.cu`): a hand-written WMMA (16³) kernel
-with FP32 accumulate, plus a cuBLAS FP16 tensor-op reference — the FP16 analogue of the FP32
-GPU roofline above. `bench_gemm_fp16` reports GFLOP/s for WMMA vs cuBLAS-FP16 vs cuBLAS-FP32 and
-the FP16-vs-FP32 accuracy delta.
+with FP32 accumulate, plus a cuBLAS FP16 tensor-op reference — the FP16 analogue of the FP32 GPU
+roofline above. GFLOP/s, FP16 in / FP32 accumulate, square, row-major (Tesla T4, CUDA 12.8):
 
-| N | wmma-f16 | cuBLAS-f16 | cuBLAS-f32 | wmma/cuBLAS-f16 |
-|---|---|---|---|---|
-| 512 / 1024 / 2048 | pending | pending | pending | pending |
+| N | wmma-f16 | cuBLAS-f16 | cuBLAS-f32 | wmma / cuBLAS-f16 | err vs f32 |
+|---|---|---|---|---|---|
+| 512  | 1807 | 12096 | 3369 | 14.9% | 9.5e-3 |
+| 1024 | 2135 | 23853 | 4294 |  9.0% | 1.5e-2 |
+| 2048 | 2725 | 34131 | 4156 |  8.0% | 2.1e-2 |
 
-**Arch requirement (learned the hard way):** the WMMA path is guarded by `__CUDA_ARCH__ >= 700`,
-and CUDA 12 `nvcc` defaults to **sm_52** unless the arch is forced — which silently compiles the
-kernel to an empty stub (a first run reported an impossible ~2.9 PFLOP/s, well past the T4's
-~65 TFLOP/s peak, with garbage output — the tell that it wasn't running). Build with
-`-DCMAKE_CUDA_ARCHITECTURES=75` (the default is now set before `enable_language(CUDA)`). The
-cuBLAS-FP16 column already validated on the same run (~30 TFLOP/s, ~half of tensor-core peak);
-the WMMA column is filled once rebuilt at sm_75. Reproduce: `./build/backends/cuda/bench_gemm_fp16`.
+**Correctness first:** our WMMA output matches cuBLAS FP16 to **0–3.8e-5** (bit-identical at
+N≥1024), and the FP16-vs-FP32 gap is **~0.01–0.02** — genuine reduced-mantissa rounding, tiny
+next to the output magnitudes (sums of thousands of terms). So the kernel is correct; the
+interesting story is the performance.
 
-A full FP16 *model* path (running GPT-2 end to end in half precision through the executor) is
-the larger next step beyond this GEMM-level study.
+**The tensor-core win, and why our kernel doesn't capture it.** cuBLAS FP16 reaches **34.1
+TFLOP/s ≈ 52% of the T4's ~65 TFLOP/s tensor-core peak — up to 8.2× over cuBLAS FP32** (34131 vs
+4156 at N=2048), which is the whole reason FP16 tensor cores are the GPU-inference fast path. Our
+WMMA kernel reaches only **~2.7 TFLOP/s (~8% of cuBLAS FP16)** — and, tellingly, **below cuBLAS
+FP32 (4.2 TFLOP/s)**. That is the honest and instructive result: a naive one-warp-per-16×16-tile
+WMMA kernel with **no shared-memory staging and no double-buffering** re-streams A/B tiles from
+global memory every K-step, so it is **memory-bandwidth bound — the tensor cores starve waiting
+for data**. Faster math makes the memory bottleneck bite *harder*, which is exactly why our WMMA
+captures a *smaller* fraction of its library (8%) than the FP32 tiled kernel did of cuBLAS FP32
+(~15%): the same "textbook kernel vs tuned library" gap as NEON-vs-Accelerate, amplified. The
+lesson — tensor cores are useless without feeding them (shared-memory tiling + double-buffering)
+— is the point of the experiment. Reproduce: `bench_gemm_fp16 --sizes 512,1024,2048` (build with
+`-DCMAKE_CUDA_ARCHITECTURES=75`; on the wrong arch the `__CUDA_ARCH__>=700` WMMA path stubs out).
+
+A full FP16 *model* path (running GPT-2 end to end in half precision through the executor) is the
+larger next step beyond this GEMM-level study.
 
 ---
 

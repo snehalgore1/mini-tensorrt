@@ -178,18 +178,18 @@ to be complete. Dynamic shapes, training, and broad operator coverage are out of
 
 Done since the initial roadmap (all measured in [`docs/RESULTS.md`](docs/RESULTS.md)): the
 CUDA GPU backend, **per-channel INT8 quantization**, a **FlashAttention-style** fused-attention
-kernel, GEMM autotuning, prefill/decode **throughput**, and an **ONNX frontend** (a second real
-frontend — loads `.onnx` into the same IR and matches ONNX Runtime bit-for-bit). Genuinely
-still ahead:
+kernel (CPU *and* a CUDA GPU version, validated on a T4), a **WMMA FP16 tensor-core GEMM**
+(cuBLAS FP16 hits ~8× over FP32 on the T4), GEMM autotuning, prefill/decode **throughput**, and
+an **ONNX frontend** (a second real frontend — loads `.onnx` into the same IR and matches ONNX
+Runtime bit-for-bit). Genuinely still ahead:
 
-- **A full FP16 model path.** A WMMA FP16 tensor-core GEMM and a CUDA FlashAttention kernel
-  are **implemented and test-wired** (`backends/cuda/gemm_fp16.cu`, `flash_attention.cu`);
-  their T4 numbers are pending a Colab run (see `colab/README.md` and the RESULTS section) —
-  this dev machine has no NVIDIA GPU. Running GPT-2 end to end in FP16 through the executor
-  is the larger next step beyond the GEMM/attention kernels.
-- **Close the GPU GEMM gap.** The hand-written tiled SGEMM reaches ~15% of cuBLAS; register/
-  warp blocking and double-buffering are the remaining levers (the FP16 WMMA kernel is the
-  tensor-core version of the same study).
+- **A full FP16 model path.** The WMMA FP16 tensor-core GEMM and the CUDA FlashAttention kernel
+  are built and measured on a T4 (`backends/cuda/gemm_fp16.cu`, `flash_attention.cu`); running
+  GPT-2 end to end in half precision through the executor is the larger next step.
+- **Close the GPU GEMM gap (add shared-memory staging).** The measured lesson from the FP16
+  study: the naive WMMA kernel is memory-bound and captures only ~8% of cuBLAS FP16 (tensor
+  cores starve without data staging). Shared-memory tiling + double-buffering — for both the
+  FP32 tiled SGEMM (~15% of cuBLAS) and the WMMA kernel — is the remaining lever.
 - **Batched decode.** The executor is single-input by design; a batch dimension across
   sequences would raise the memory-bandwidth-bound decode utilization (see the throughput note).
 - **INT8 SIMD speedup.** Quantization currently wins on size; a NEON `SDOT` kernel with
