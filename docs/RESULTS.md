@@ -395,14 +395,34 @@ The prefill path benefits directly from the tuned `MatMul`/`BatchedMatMul` above
 
 ## Full benchmark matrix (Week 8)
 
-| System | p50 (ms) | p95 (ms) | Peak mem | Notes |
+The cumulative optimization ladder on the **GPT-2-small block** (2 layers, S=128, D=768,
+H=12, FFN=3072 — the same model as the memory/fusion tables above), plus the PyTorch-eager
+reference. Each MiniTensorRT row adds **one** optimization to the row above it. Latency is
+p50/p95 wall time per forward (`bench_model --model models/gpt2_block.json`, warm, steady
+state, setup/parse excluded); the GEMM variant is selected with `MTRT_MATMUL`.
+
+| System | p50 (ms) | p95 (ms) | Peak mem | What changed |
 |---|---|---|---|---|
-| PyTorch eager | TBD | TBD | TBD | high-level baseline |
-| ONNX Runtime CPU | TBD | TBD | TBD | optimized reference |
-| MiniTensorRT naive | TBD | TBD | TBD | correctness baseline |
-| + memory planner | TBD | TBD | TBD | |
-| + fusion | TBD | TBD | TBD | |
-| + SIMD GEMM | TBD | TBD | TBD | |
-| + threading | TBD | TBD | TBD | |
+| PyTorch eager (Accelerate, 6 thr) | **6.7** | 7.8 | — (framework allocator) | high-level reference |
+| ONNX Runtime CPU | TBD | TBD | TBD | needs a GPT-2 `.onnx` export (ONNX frontend, not built) |
+| MiniTensorRT naive | 2281 | 2343 | 28.1 MB | triple-loop GEMM, naive per-op allocator |
+| + memory planner | 2281 | 2343 | **3.4 MB** | greedy arena — memory only, latency unchanged |
+| + fusion | 2229 | 2292 | **2.25 MB** | FFN MatMul+Bias+GeluTanh fused (memory again) |
+| + SIMD GEMM (NEON 8×8) | **63.8** | 66.9 | 2.25 MB | packed NEON microkernel — **36× latency** |
+| + threading (8 cores) | **40.9** | 45.2 | 2.25 MB | multithreaded over tiles — 1.6× more |
+
+**Reading.** The ladder isolates each optimization on the axis it actually moves: the
+memory planner and fusion cut peak memory **28.1 → 3.4 → 2.25 MB (12.5×)** with latency flat
+(they are memory/IR-rewrite wins, as the fusion section explains), while the NEON microkernel
+and threading cut latency **2281 → 40.9 ms (56×)** with memory flat. End to end MiniTensorRT
+goes from a correctness baseline to **56× faster and 12.5× smaller**. PyTorch eager still wins
+by **~6×** (6.7 vs 40.9 ms) — the same AMX story as the GEMM ladder: PyTorch dispatches to
+Accelerate, which uses Apple's on-die matrix coprocessor (~3× above the entire NEON roofline)
+and is unreachable from portable NEON. The gap we *can* close, we did; the rest is AMX.
+ONNX Runtime CPU stays TBD by scope — it needs a GPT-2 ONNX export, which is the (unbuilt)
+ONNX frontend, not a measurement gap in the runtime.
 
 All latencies measured after warm-up, steady state, setup and parse time excluded.
+Reproduce: PyTorch row `python python/bench_torch_block.py`; MiniTensorRT rows
+`MTRT_MATMUL={naive,neon,threaded} ./build/benchmarks/bench_model --model
+models/gpt2_block.json` (naive-allocator peak from `MemoryPlanner.ReportStatsGpt2`).

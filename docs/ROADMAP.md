@@ -1,6 +1,9 @@
 # Roadmap
 
-**Current week: 6**
+**Current week: 8** (Weeks 1–5 done; Week 7 did *both* CUDA and INT8; Week 6 ONNX
+frontend deferred — see the ONNX Runtime row in `docs/RESULTS.md`. Stretch work beyond
+the roadmap: GEMM autotuning, FlashAttention, BatchedMatMul tuning, prefill/decode
+throughput — all in `docs/RESULTS.md`.)
 
 Each week has a hard "definition of done." Do not start the next week until the current
 week's DoD is met and its results are recorded. Weeks 1 through 4 are the core; the
