@@ -208,23 +208,32 @@ baseline).
 | `MTRT_MATMUL=naive` (triple loop) | ~2,289 ms | 1.0x |
 | default (NEON microkernel + threaded) | ~73.3 ms | **~31x** |
 
-Per-operator attribution of one optimized run (`bench_model --trace`, ~75.7 ms):
+**Profile-driven step: tuning `BatchedMatMul`.** With `MatMul` tuned, the profiler
+flagged attention's `BatchedMatMul` (QKᵀ and attn·V) as the single hottest op --
+it was still the naive triple loop. Routing each batch slice through the same
+`gemm_auto` (both attention products are plain `[M,K]@[K,N]` per head, since the
+operand is pre-transposed) collapses it. Before/after, same machine, one
+representative run each (`bench_model --model models/gpt2_block.json --warmup 20
+--iters 200 --trace`):
 
-| Op | Time | Share | Note |
-|---|---|---|---|
-| BatchedMatMul | 34.8 ms | 45.9% | attention QK^T and attn·V -- **still the naive kernel** |
-| MatMul | 31.6 ms | 41.7% | projections + FFN, now on the tuned GEMM |
-| Transpose | 3.3 ms | 4.4% | head-split / merge copies |
-| GeluTanh | 3.1 ms | 4.1% | |
-| Softmax / LayerNorm / Add / Reshape / Scale | <2 ms each | <5% total | |
+| Op | Before (naive BMM) | After (tuned BMM) |
+|---|---|---|
+| BatchedMatMul | 33.7 ms (47.5%) | **3.9 ms (9.8%)** — ~8.6× |
+| MatMul | 29.1 ms (41.0%) | 27.3 ms (**69.0%**) |
+| Transpose | 2.9 ms (4.0%) | 2.8 ms (7.1%) |
+| GeluTanh | 2.5 ms (3.4%) | 2.7 ms (6.8%) |
+| Softmax / LayerNorm / Add / Reshape / Scale | <1.3 ms each | <1.3 ms each |
+| **Whole block, p50 (unfused)** | **70.3 ms** | **40.7 ms** |
 
-**Reading (profile before optimizing).** Speeding up `MatMul` gave ~31x on the
-full model and, as expected, shifted the bottleneck: attention's **naive
-`BatchedMatMul` is now the single hottest op (45.9%)** because it was never
-optimized. That is the clear next step -- route each batch slice of
-`BatchedMatMul` through the same `gemm_auto` -- and would roughly halve the
-remaining runtime. Recorded here rather than done silently (one optimization per
-commit; the profiler now justifies it).
+**Reading (profile before optimizing).** The profiler predicted this would "roughly
+halve the remaining runtime," and it did: the block drops **70.3 → 40.7 ms p50
+(1.73×)** off a single op change, because `BatchedMatMul` itself goes **8.6× faster**
+(33.7 → 3.9 ms). The bottleneck then shifts back to `MatMul` (now 69% — projections +
+FFN, the largest FLOP contributor), which is the expected steady state: the two dense
+matmul families dominate, and both now run the tuned NEON ladder. Whole-model
+correctness is unchanged — `Gpt2Real.LogitsMatchHuggingFace` still passes (0 argmax
+mismatches vs HuggingFace), so the reassociation from the blocked kernel stays within
+tolerance. `MTRT_MATMUL=naive` still forces both back to the triple loop for the ablation.
 
 Per-operator flame chart: generate with `bench_model --model
 models/gpt2_block.json --trace gpt2.trace.json` and open in chrome://tracing or

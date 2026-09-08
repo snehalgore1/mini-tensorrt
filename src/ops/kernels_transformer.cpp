@@ -2,6 +2,7 @@
 #include <cstring>
 #include <vector>
 
+#include "backends/cpu/gemm.h"
 #include "kernels.h"
 #include "mtrt/support/assert.h"
 #include "mtrt/tensor.h"
@@ -135,17 +136,14 @@ void batched_matmul_f32(const OpContext& ctx) {
   const float* a = A.data<float>();
   const float* b = B.data<float>();
   float* c = C.data<float>();
+  // Each batch slice is a plain [M,K]@[K,N] row-major GEMM (both attention uses --
+  // QKᵀ and attn·V -- pre-transpose their operand, so A@B here is standard). Route
+  // it through the tuned Week-5 ladder instead of the triple loop; the profiler
+  // flagged this as the single hottest op once MatMul was tuned (docs/RESULTS.md).
+  // gemm_auto honors MTRT_MATMUL=naive, so the ablation baseline stays selectable.
   for (int64_t bi = 0; bi < bt; ++bi) {
-    const float* ab = a + bi * M * K;
-    const float* bb = b + bi * K * N;
-    float* cb = c + bi * M * N;
-    for (int64_t i = 0; i < M; ++i) {
-      for (int64_t j = 0; j < N; ++j) {
-        float acc = 0.0f;
-        for (int64_t k = 0; k < K; ++k) acc += ab[i * K + k] * bb[k * N + j];
-        cb[i * N + j] = acc;
-      }
-    }
+    cpu::gemm_auto(a + bi * M * K, b + bi * K * N, c + bi * M * N,
+                   static_cast<int>(M), static_cast<int>(N), static_cast<int>(K));
   }
 }
 
