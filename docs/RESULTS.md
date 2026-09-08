@@ -359,6 +359,40 @@ exactly the regime it exists for. Enable with `export_gpt2_hf.py --flash`; measu
 
 ---
 
+## Throughput — prefill vs decode (T)
+
+Latency (per `run()`) is only half the picture; the number an inference runtime is judged
+on is **tokens/second**. LLM serving reports it in two regimes, and this runtime already
+has both as distinct execution paths:
+
+- **Prefill** — the static graph processes **all S positions in one forward**, so the
+  position dimension folds into the batched GEMMs (the tuned NEON ladder). S tokens land
+  per forward.
+- **Decode** — the KV-cache steps **one token at a time**; each step is O(context) work
+  but reloads the full weight set.
+
+Real GPT-2 124M, Apple M1 Pro, Release, S=64 (median of 10 warm forwards for prefill; KV
+decode steady-state; `run_gpt2 --mode throughput`):
+
+| Regime | Throughput | Per-token cost |
+|---|---|---|
+| **Prefill** (static graph, 64 positions/forward) | **287 tok/s** | 3.5 ms/token (222.7 ms ÷ 64) |
+| **Decode** (KV-cache, 1 token/step) | **8.8 tok/s** | 113.6 ms/token |
+
+**Prefill is ~32× the decode throughput per token** — the defining asymmetry of LLM
+inference, and the numbers show exactly why. Decode is **memory-bandwidth bound**: to
+produce one token it must stream all ~622 MB of weights through the ALUs for a single row
+of work (arithmetic intensity ≈ 1), so per-token time is set by DRAM bandwidth, not FLOPs.
+Prefill is **compute bound**: the same weight load is amortized across 64 positions in one
+batched GEMM (intensity ≈ 64×), so it runs near the tuned-GEMM roofline. This is why
+production stacks batch aggressively and why decode, not prefill, is the serving
+bottleneck. Both paths here run **batch=1** — the executor is single-input by design
+(static shapes, one sequence); batching independent sequences to raise decode utilization
+is the natural next step and would need a batch dimension threaded through the executor.
+The prefill path benefits directly from the tuned `MatMul`/`BatchedMatMul` above.
+
+---
+
 ## Full benchmark matrix (Week 8)
 
 | System | p50 (ms) | p95 (ms) | Peak mem | Notes |

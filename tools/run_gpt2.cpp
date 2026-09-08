@@ -9,12 +9,15 @@
 //                  pre-allocated to a fixed max context and a runtime position
 //                  tracks the valid length (N3).
 //   --mode bench : run both, assert identical output ids, and report the speedup.
+//   --mode throughput : report prefill and decode tokens/sec on the real model
+//                  (KV-cache path, with the recompute path timed for contrast).
 //
 //   run_gpt2 --mode bench --ids "464 2068 7586" --max-new 20
 //
 // Reads prompt token ids (space-separated, --ids or stdin), prints generated ids.
 // Tokenization is done in Python (python/gpt2_generate.py); this is the runtime.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -188,17 +191,25 @@ struct KVDecoder {
   }
 };
 
+// Split timing of the two throughput regimes real LLM serving reports separately:
+// prefill (ingesting the prompt) and decode (autoregressive generation).
+struct GenTiming { double prefill_ms = 0.0, decode_ms = 0.0; };
+
 std::vector<int32_t> generate_kv(const LoadedModel& m, const std::vector<int32_t>& prompt,
-                                 int max_new, int heads) {
+                                 int max_new, int heads, GenTiming* timing = nullptr) {
   KVDecoder dec(m, heads, (int)prompt.size() + max_new + 1);
   std::vector<int32_t> gen;
   int pos = 0;
   int32_t next = 0;
+  const double t0 = now_ms();
   for (int32_t tok : prompt) next = dec.step(tok, pos++);  // prefill
+  const double t1 = now_ms();
   for (int i = 0; i < max_new; ++i) {
     gen.push_back(next);
     next = dec.step(next, pos++);
   }
+  const double t2 = now_ms();
+  if (timing) { timing->prefill_ms = t1 - t0; timing->decode_ms = t2 - t1; }
   return gen;
 }
 }  // namespace
@@ -251,6 +262,46 @@ int main(int argc, char** argv) {
               << std::endl;
     print_ids(g_kv);
     return same ? 0 : 1;
+  } else if (mode == "throughput") {
+    // The two throughput regimes real LLM serving reports, mapped onto this
+    // runtime's two paths:
+    //   prefill = the static graph processes all S positions in ONE forward
+    //             (the position dim becomes a batched GEMM), so S tokens land per
+    //             forward -> high tok/s (parallel).
+    //   decode  = the KV-cache steps one token at a time -> lower tok/s
+    //             (sequential, but each step is O(context), not O(S)).
+    Executor exec(m.graph, reg);
+    const TensorId in_id = m.graph.graph_inputs()[0];
+    const int64_t S = m.graph.tensor(in_id).shape[0];
+    auto one_forward = [&]() {
+      Tensor ids = Tensor::owning(DType::kI32, {S});
+      int32_t* p = ids.data<int32_t>();
+      for (int64_t i = 0; i < S; ++i) p[i] = (int32_t)(i < (int64_t)prompt.size() ? prompt[i] : 0);
+      std::unordered_map<TensorId, Tensor> b = m.weights;
+      b.emplace(in_id, ids);
+      volatile float sink = exec.run(b)[0].data<float>()[0];
+      (void)sink;
+    };
+    one_forward();  // warm-up (page in the 622 MB of weights)
+    const int reps = 10;
+    std::vector<double> lat;
+    for (int r = 0; r < reps; ++r) { double t = now_ms(); one_forward(); lat.push_back(now_ms() - t); }
+    std::sort(lat.begin(), lat.end());
+    const double prefill_ms = lat[lat.size() / 2];  // median full-forward latency
+
+    GenTiming warm;
+    generate_kv(m, prompt, max_new, heads, &warm);  // warm-up decode path
+    GenTiming kv;
+    generate_kv(m, prompt, max_new, heads, &kv);
+
+    const double prefill_tps = S / (prefill_ms / 1000.0);
+    const double decode_tps = max_new / (kv.decode_ms / 1000.0);
+    std::cerr << "[RESULTS] throughput, real GPT-2 124M (S=" << S << ", max_new=" << max_new << ")\n"
+              << "  prefill (static graph, all " << S << " positions/forward): "
+              << prefill_tps << " tok/s (" << prefill_ms << " ms/forward)\n"
+              << "  decode  (KV-cache, 1 token/step): "
+              << decode_tps << " tok/s (" << kv.decode_ms / max_new << " ms/token)\n";
+    return 0;
   } else {
     std::cerr << "run_gpt2: unknown --mode " << mode << "\n";
     return 1;
