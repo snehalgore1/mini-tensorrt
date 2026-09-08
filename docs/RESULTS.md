@@ -433,7 +433,7 @@ state, setup/parse excluded); the GEMM variant is selected with `MTRT_MATMUL`.
 | System | p50 (ms) | p95 (ms) | Peak mem | What changed |
 |---|---|---|---|---|
 | PyTorch eager (Accelerate, 6 thr) | **6.7** | 7.8 | — (framework allocator) | high-level reference |
-| ONNX Runtime CPU | TBD | TBD | TBD | needs a GPT-2 `.onnx` export (ONNX frontend, not built) |
+| ONNX Runtime CPU (MLAS) | **11.9** | 12.5 | — (framework allocator) | optimized graph-opt reference |
 | MiniTensorRT naive | 2281 | 2343 | 28.1 MB | triple-loop GEMM, naive per-op allocator |
 | + memory planner | 2281 | 2343 | **3.4 MB** | greedy arena — memory only, latency unchanged |
 | + fusion | 2229 | 2292 | **2.25 MB** | FFN MatMul+Bias+GeluTanh fused (memory again) |
@@ -444,14 +444,18 @@ state, setup/parse excluded); the GEMM variant is selected with `MTRT_MATMUL`.
 memory planner and fusion cut peak memory **28.1 → 3.4 → 2.25 MB (12.5×)** with latency flat
 (they are memory/IR-rewrite wins, as the fusion section explains), while the NEON microkernel
 and threading cut latency **2281 → 40.9 ms (56×)** with memory flat. End to end MiniTensorRT
-goes from a correctness baseline to **56× faster and 12.5× smaller**. PyTorch eager still wins
-by **~6×** (6.7 vs 40.9 ms) — the same AMX story as the GEMM ladder: PyTorch dispatches to
-Accelerate, which uses Apple's on-die matrix coprocessor (~3× above the entire NEON roofline)
-and is unreachable from portable NEON. The gap we *can* close, we did; the rest is AMX.
-ONNX Runtime CPU stays TBD by scope — it needs a GPT-2 ONNX export, which is the (unbuilt)
-ONNX frontend, not a measurement gap in the runtime.
+goes from a correctness baseline to **56× faster and 12.5× smaller**. Both production runtimes
+still win: PyTorch eager by **~6×** (6.7 ms) and ONNX Runtime by **~3.4×** (11.9 ms). This is
+the same AMX story as the GEMM ladder — PyTorch dispatches to Accelerate, which uses Apple's
+on-die matrix coprocessor (~3× above the entire NEON roofline, unreachable from portable NEON);
+ORT's MLAS CPU kernels don't hit AMX, so it lands between PyTorch and us, its edge coming from
+graph-level fusion and hand-tuned kernels. The gap we *can* close, we did; the rest is AMX and
+years of kernel engineering.
 
 All latencies measured after warm-up, steady state, setup and parse time excluded.
-Reproduce: PyTorch row `python python/bench_torch_block.py`; MiniTensorRT rows
-`MTRT_MATMUL={naive,neon,threaded} ./build/benchmarks/bench_model --model
-models/gpt2_block.json` (naive-allocator peak from `MemoryPlanner.ReportStatsGpt2`).
+Reproduce: PyTorch row `python python/bench_torch_block.py`; ONNX Runtime row `python
+python/bench_ort_block.py`; MiniTensorRT rows `MTRT_MATMUL={naive,neon,threaded}
+./build/benchmarks/bench_model --model models/gpt2_block.json` (naive-allocator peak from
+`MemoryPlanner.ReportStatsGpt2`). ORT and PyTorch time the *same* block; ORT via a
+torch.onnx export, run through ONNX Runtime (a reference baseline — distinct from
+MiniTensorRT's own ONNX frontend, proven on the MLP in the ONNX frontend section).

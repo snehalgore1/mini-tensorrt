@@ -13,6 +13,7 @@ venv/
 # generated models and fixtures are regenerable, but keep goldens small and committed
 models/*.bin
 models/*.onnx
+models/*.onnx.data
 !models/goldens/
 # ...except the small model fixtures: committed so the C++ test suite needs no Python (D8)
 !models/mlp.bin
