@@ -141,38 +141,41 @@ in topo order on one stream).
 **86.8 MB reused, a 98% reduction** — and the whole model still produces identical tokens
 (`argmax_mism=0`), so the reuse preserves numerics on the GPU. Measured by `cuda_model_test`.
 
-### GPU FlashAttention (F-GPU) and FP16 tensor cores (H) — pending Colab measurement
+### GPU FlashAttention (F-GPU) — measured on a Colab T4
 
-The CUDA kernels for both are **implemented and wired to tests** but not yet measured here:
-this development machine is an Apple M1 (no NVIDIA GPU), and per the project's prime directive
-a number is only recorded once measured. Both run on a Colab T4 — see `colab/README.md` — and
-the results go here once captured.
+**F-GPU — CUDA FlashAttention** (`backends/cuda/flash_attention.cu`): the online-softmax fused
+causal attention kernel, a GPU port of the CPU kernel — one thread per (head, query), O(d)
+register scratch, no `[H,S,S]` materialization. Correctness is a real test: `cuda_test` runs it
+against the *same* PyTorch golden as the CPU kernel (`op_flashattn_*`).
 
-- **F-GPU — CUDA FlashAttention** (`backends/cuda/flash_attention.cu`): the online-softmax
-  fused causal attention kernel, a GPU port of the CPU kernel, one thread per (head, query),
-  O(d) register scratch (no `[H,S,S]` materialization). Correctness is a real test —
-  `cuda_test` runs it against the *same* PyTorch golden as the CPU kernel (`op_flashattn_*`).
+| Check (Tesla T4, CUDA 12.8) | Result |
+|---|---|
+| FlashAttn GPU vs PyTorch golden (`op_flashattn_*`) | **PASS**, max abs err **1.19e-07** |
 
-  | Check (Colab T4) | Result |
-  |---|---|
-  | FlashAttn GPU vs PyTorch golden | pending Colab (`./build/backends/cuda/cuda_test`) |
+So the fused online-softmax attention produces the same result on the GPU as PyTorch's
+reference, at float32 rounding level. Measured by `./build/backends/cuda/cuda_test`.
 
-- **H — FP16 tensor-core GEMM** (`backends/cuda/gemm_fp16.cu`): a hand-written WMMA (16³)
-  kernel with FP32 accumulate, plus a cuBLAS FP16 tensor-op reference — the FP16 analogue of
-  the FP32 GPU roofline above. `bench_gemm_fp16` reports GFLOP/s for WMMA vs cuBLAS-FP16 vs
-  cuBLAS-FP32 and the FP16-vs-FP32 accuracy delta.
+### FP16 tensor cores (H) — pending correct-arch Colab rebuild
 
-  | N | wmma-f16 | cuBLAS-f16 | cuBLAS-f32 | wmma/cuBLAS-f16 |
-  |---|---|---|---|---|
-  | 512 / 1024 / 2048 | pending Colab | pending Colab | pending Colab | pending Colab |
+**H — FP16 tensor-core GEMM** (`backends/cuda/gemm_fp16.cu`): a hand-written WMMA (16³) kernel
+with FP32 accumulate, plus a cuBLAS FP16 tensor-op reference — the FP16 analogue of the FP32
+GPU roofline above. `bench_gemm_fp16` reports GFLOP/s for WMMA vs cuBLAS-FP16 vs cuBLAS-FP32 and
+the FP16-vs-FP32 accuracy delta.
 
-  Reproduce: `./build/backends/cuda/bench_gemm_fp16 --sizes 512,1024,2048`. Expected shape
-  (to be confirmed): cuBLAS FP16 on the T4's tensor cores is a large multiple of cuBLAS FP32
-  (~65 vs ~8.1 TFLOP/s peak), and our WMMA kernel reaches a fraction of cuBLAS FP16 — the same
-  "textbook kernel vs tuned library" story as tiled-vs-cuBLAS (FP32) and NEON-vs-Accelerate.
+| N | wmma-f16 | cuBLAS-f16 | cuBLAS-f32 | wmma/cuBLAS-f16 |
+|---|---|---|---|---|
+| 512 / 1024 / 2048 | pending | pending | pending | pending |
 
-  A full FP16 *model* path (running GPT-2 end to end in half precision through the executor)
-  is the larger next step beyond this GEMM-level study.
+**Arch requirement (learned the hard way):** the WMMA path is guarded by `__CUDA_ARCH__ >= 700`,
+and CUDA 12 `nvcc` defaults to **sm_52** unless the arch is forced — which silently compiles the
+kernel to an empty stub (a first run reported an impossible ~2.9 PFLOP/s, well past the T4's
+~65 TFLOP/s peak, with garbage output — the tell that it wasn't running). Build with
+`-DCMAKE_CUDA_ARCHITECTURES=75` (the default is now set before `enable_language(CUDA)`). The
+cuBLAS-FP16 column already validated on the same run (~30 TFLOP/s, ~half of tensor-core peak);
+the WMMA column is filled once rebuilt at sm_75. Reproduce: `./build/backends/cuda/bench_gemm_fp16`.
+
+A full FP16 *model* path (running GPT-2 end to end in half precision through the executor) is
+the larger next step beyond this GEMM-level study.
 
 ---
 

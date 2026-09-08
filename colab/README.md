@@ -24,10 +24,16 @@ plenty). The macOS/CPU build never touches CUDA — it is all gated behind `-DMT
 
 ```bash
 # Configure + build the CUDA backend, then run the M0 smoke test.
-!cmake -B build -DCMAKE_BUILD_TYPE=Release -DMTRT_CUDA=ON
+# -DCMAKE_CUDA_ARCHITECTURES=75 targets the T4's tensor cores: without it, CUDA 12
+# nvcc defaults to sm_52 and the FP16 WMMA kernel (needs sm_70+) compiles to a stub.
+!cmake -B build -DCMAKE_BUILD_TYPE=Release -DMTRT_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75
 !cmake --build build -j --target cuda_smoke
 !./build/backends/cuda/cuda_smoke
 ```
+
+If you configured `build/` earlier without the arch flag, the value is cached — pass
+`-DCMAKE_CUDA_ARCHITECTURES=75` again (it overrides the cache) or `rm -rf build` and
+reconfigure, otherwise the FP16 kernel stays stubbed.
 
 Expected output (M0):
 

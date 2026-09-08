@@ -68,6 +68,14 @@ endif()
 
 # --- CUDA backend (only when MTRT_CUDA=ON) ----------------------------------
 if(MTRT_CUDA)
+  # MUST run before enable_language(CUDA): that call auto-populates
+  # CMAKE_CUDA_ARCHITECTURES with nvcc's default (sm_52 on CUDA 12), which would
+  # make the `if(NOT DEFINED)` in backends/cuda/CMakeLists a no-op and compile the
+  # FP16 tensor-core kernel (guarded by __CUDA_ARCH__>=700) out to an empty stub.
+  # Default to the Colab T4 (sm_75); still overridable with -DCMAKE_CUDA_ARCHITECTURES=.
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 75)
+  endif()
   enable_language(CUDA)
   add_subdirectory(backends/cuda)
 endif()
