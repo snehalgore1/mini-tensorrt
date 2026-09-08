@@ -59,6 +59,8 @@ real-GPT-2 case when they are absent, so a clean checkout builds and tests with 
 - Plans tensor lifetimes and packs intermediates into a single reused arena
 - Rewrites the graph with fusion and constant-folding passes, verified numerically equivalent
 - A **KV-cache** decode path for fast autoregressive generation
+- **INT8 weight quantization** (per-channel) and a **FlashAttention-style** fused-attention path
+- Reports **prefill and decode throughput** (tokens/sec), not just latency
 - Profiles per-operator cost and emits Chrome Trace Event output
 
 ## Highlights (all measured — see [`docs/RESULTS.md`](docs/RESULTS.md))
@@ -78,8 +80,52 @@ ceilings:
 ![Roofline](docs/images/roofline.png)
 
 Apple Accelerate is ~7× faster still — because it uses the **AMX matrix coprocessor**, which
-sits *above the entire NEON roofline* and is not reachable from portable NEON. That kernel is
-wired into the model's `MatMul`, giving a **~31× full-model speedup** over the naive path.
+sits *above the entire NEON roofline* and is not reachable from portable NEON. Block sizes are
+**autotuned** (a 36-config MC/NC/KC sweep) to ~87% of the 1-core peak rather than guessed.
+
+That kernel is wired into **both** matmul families in the model — the projection/FFN `MatMul`
+and attention's `BatchedMatMul` (QKᵀ and attn·V), the latter after the profiler flagged it as
+the hottest op. End to end on the GPT-2 block the full optimization ladder is **56× faster and
+12.5× smaller** than the naive baseline (2281 → 40.7 ms p50; 28.1 → 2.25 MB peak). The
+[Week 8 matrix](docs/RESULTS.md#full-benchmark-matrix-week-8) isolates each step's effect and
+compares against PyTorch eager (which still wins ~6× — the same AMX story).
+
+### Throughput: prefill vs decode
+
+Tokens/sec is the number an inference runtime is judged on. The two regimes map onto the
+runtime's two paths — the static graph processes all positions in one batched-GEMM forward
+(prefill), the KV-cache steps one token at a time (decode). Real GPT-2 124M, M1 Pro:
+
+| Regime | Throughput | Per-token |
+|---|---|---|
+| **Prefill** (all 64 positions/forward) | **287 tok/s** | 3.5 ms/tok |
+| **Decode** (KV-cache, 1 token/step) | **8.8 tok/s** | 113.6 ms/tok |
+
+The **~32× asymmetry is the defining fact of LLM inference**, and the numbers show why: decode
+is *memory-bandwidth bound* (it streams all 622 MB of weights to produce one token), prefill is
+*compute bound* (that weight load is amortized across 64 positions). It's why production stacks
+batch aggressively. (`run_gpt2 --mode throughput`.)
+
+### INT8 weight quantization
+
+Symmetric INT8 quantization of the weight matrices: **weights 4.0× smaller** (494 → 124 MB),
+full model 2.31× (652 → 282 MB). The headline finding is measured, not assumed —
+
+| Scheme | max logit error vs FP32 |
+|---|---|
+| Per-tensor (one scale/matrix) | 22.3 — **wrecks GPT-2** |
+| **Per-channel (one scale/column)** | **2.53** |
+
+A single per-tensor scale is dominated by weight outliers; **per-channel recovers accuracy 8.8×
+at the same 4× compression** — which is why production transformer quantization is per-channel.
+(`python python/quantize_gpt2.py`.)
+
+### FlashAttention-style fused attention
+
+A single fused kernel computes `softmax(QKᵀ)·V` with **online (streaming) softmax**, never
+materializing the `[H,S,S]` score matrix. On real GPT-2 it produces **identical tokens**; the
+memory win grows with sequence length — **50% lower peak at S=512** (27 → 13.5 MB), exactly the
+long-context regime it exists for. Golden-tested against PyTorch `scaled_dot_product_attention`.
 
 ### Memory planning
 
@@ -120,13 +166,18 @@ to be complete. Dynamic shapes, training, and broad operator coverage are out of
 
 ## What I would build next in a production runtime
 
+Done since the initial roadmap (all measured in [`docs/RESULTS.md`](docs/RESULTS.md)): the
+CUDA GPU backend, **per-channel INT8 quantization**, a **FlashAttention-style** fused-attention
+kernel, GEMM autotuning, and prefill/decode **throughput**. Genuinely still ahead:
+
+- **FP16 tensor cores + a GPU FlashAttention kernel.** The FP32 GPU path establishes
+  correctness; FP16 on the T4's tensor cores is the real GPU inference fast path, and porting
+  the online-softmax attention kernel to CUDA is the natural next step.
 - **Close the GPU GEMM gap.** The hand-written tiled SGEMM reaches ~15% of cuBLAS; register/
-  warp blocking, double-buffering, and FP16 tensor cores (T4) are the next steps toward the
-  real inference fast path.
-- **Quantization (INT8 / FP16).** The FP32 path establishes correctness; INT8 with INT32
-  accumulation (and an accuracy-vs-speed table on real GPT-2) is the production tradeoff that
-  matters most, and FP16/tensor-cores is the real GPU inference path.
-- **Fused attention.** Attention currently materializes the full score matrix; a
-  FlashAttention-style tiled kernel with online softmax would remove that memory traffic.
-- **A standard frontend (ONNX)** to prove the IR is truly frontend-agnostic and ingest models
-  without a bespoke exporter.
+  warp blocking and double-buffering are the remaining levers.
+- **Batched decode.** The executor is single-input by design; a batch dimension across
+  sequences would raise the memory-bandwidth-bound decode utilization (see the throughput note).
+- **INT8 SIMD speedup.** Quantization currently wins on size; a NEON `SDOT` kernel with
+  activation quantization would turn that into a latency win too.
+- **An ONNX frontend** (in progress) to ingest models without a bespoke exporter and *prove*
+  the IR is frontend-agnostic by adding a second real frontend.
