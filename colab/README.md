@@ -41,3 +41,36 @@ copies). Later milestones add the device tensor, cuBLAS/attention kernels, and a
 `CudaExecutor` that runs the whole GPT-2 block on the GPU — validated against the CPU
 reference from this repo. Paste the `[CUDA] ...` / `[RESULTS] ...` output back so the
 numbers can be recorded in `docs/RESULTS.md`.
+
+## Correctness + kernel tests (all GPU kernels vs PyTorch goldens)
+
+```bash
+!cmake --build build -j --target cuda_test cuda_model_test
+!./build/backends/cuda/cuda_test          # per-op goldens, incl. FlashAttention (F-GPU)
+!./build/backends/cuda/cuda_model_test    # whole GPT-2 block: GPU vs CPU
+```
+
+`cuda_test` should end with `[CUDA-TEST] all passed`, and the `FlashAttn` line confirms
+the fused online-softmax GPU kernel matches the PyTorch golden.
+
+## F-GPU + H benchmarks (paste output back to record in RESULTS.md)
+
+These two rows in `docs/RESULTS.md` are marked "pending Colab measurement" — they need a
+real GPU. Run the benches and paste the output back:
+
+```bash
+# H: FP16 tensor-core GEMM (our WMMA kernel vs cuBLAS FP16 vs FP32), GFLOP/s.
+!cmake --build build -j --target bench_gemm_fp16
+!./build/backends/cuda/bench_gemm_fp16 --sizes 512,1024,2048
+
+# F-GPU FlashAttention correctness is covered by cuda_test above; the FP32 GEMM
+# roofline (context for the FP16 numbers) is:
+!cmake --build build -j --target bench_gemm_cuda
+!./build/backends/cuda/bench_gemm_cuda --sizes 512,1024,2048
+```
+
+The FP16 bench prints `wmma-f16`, `cuBLAS-f16`, and `cuBLAS-f32` GFLOP/s per size plus the
+FP16-vs-FP32 accuracy delta. Expected shape of the result: cuBLAS FP16 (tensor cores) is a
+large multiple of cuBLAS FP32 on the T4 (~65 vs ~8 TFLOP/s peak), and our WMMA kernel lands
+some fraction of cuBLAS FP16 — the "textbook tensor-core kernel vs tuned library" story,
+the FP16 analogue of the NEON-vs-Accelerate and tiled-vs-cuBLAS gaps already in the repo.

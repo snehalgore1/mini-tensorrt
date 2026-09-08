@@ -1,9 +1,12 @@
 #pragma once
 
+#include <cuda_fp16.h>  // half, for the FP16 tensor-core GEMM (H)
+
 // CUDA kernel launchers for the GPT-2 operator set. Every pointer here is a
-// DEVICE pointer; all tensors are row-major, contiguous, FP32. These mirror the
-// CPU kernels in src/ops/ and are validated against the same PyTorch goldens
-// (backends/cuda/cuda_test.cu). Host-callable (compiled by nvcc).
+// DEVICE pointer; all tensors are row-major, contiguous, FP32 (except the FP16
+// GEMM below). These mirror the CPU kernels in src/ops/ and are validated
+// against the same PyTorch goldens (backends/cuda/cuda_test.cu). Host-callable
+// (compiled by nvcc).
 
 namespace mtrt::cuda {
 
@@ -56,6 +59,18 @@ void batched_matmul(const float* A, const float* Bmat, float* C, int batch, int 
 
 // Embedding gather: out[t,:] = table[ids[t],:]. table [V,D] (f32), ids [T] (i32).
 void gather(const float* table, const int* ids, float* out, int T, int D);
+
+// FlashAttention-style fused causal attention with online softmax (F-GPU):
+// out[H,S,d] = softmax(scale·QKᵀ + causal_mask)·V, never materializing [H,S,S].
+// Q,K,V,O are [H,S,d] device pointers. Mirrors the CPU kernel; same golden.
+void flash_attention(const float* Q, const float* K, const float* V, float* O,
+                     int H, int S, int d, float scale);
+
+// FP16 tensor-core GEMM (H): C[M,N] = A[M,K] @ B[K,N], half in / FP32 accumulate.
+// gemm_wmma_fp16 is our hand-written WMMA (16³) kernel; matmul_fp16 is the cuBLAS
+// tensor-op reference. Requires M,N,K multiples of 16. Row-major.
+void gemm_wmma_fp16(const half* A, const half* B, float* C, int M, int N, int K);
+void matmul_fp16(const half* A, const half* B, float* C, int M, int N, int K);
 
 // Free the shared cuBLAS handle (optional; process teardown).
 void shutdown();

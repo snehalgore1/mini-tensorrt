@@ -182,6 +182,20 @@ int main() {
     cudaFree(dt); cudaFree(di); cudaFree(dy);
   }
 
+  // FlashAttention (F-GPU): Q,K,V [2,5,3] causal, scale=1/sqrt(3), vs the same
+  // PyTorch golden the CPU kernel uses. Proves the fused GPU kernel is correct.
+  {
+    NpyArray q = load_golden("op_flashattn_q"), k = load_golden("op_flashattn_k"),
+             v = load_golden("op_flashattn_v"), o = load_golden("op_flashattn_out");
+    const int H = (int)q.shape[0], S = (int)q.shape[1], d = (int)q.shape[2];
+    float *dq = upload(q.data), *dk = upload(k.data), *dv = upload(v.data), *doo;
+    CK(cudaMalloc(&doo, q.data.size() * sizeof(float)));
+    mtrt::cuda::flash_attention(dq, dk, dv, doo, H, S, d, 1.0f / std::sqrt((float)d));
+    CK(cudaDeviceSynchronize());
+    check("FlashAttn", download(doo, q.numel()), o.data, 1e-4f);
+    cudaFree(dq); cudaFree(dk); cudaFree(dv); cudaFree(doo);
+  }
+
   mtrt::cuda::shutdown();
   std::printf(g_fail ? "[CUDA-TEST] %d FAILED\n" : "[CUDA-TEST] all passed\n", g_fail);
   return g_fail ? 1 : 0;

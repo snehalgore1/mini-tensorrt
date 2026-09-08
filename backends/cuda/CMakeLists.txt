@@ -14,7 +14,8 @@ add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets>)
 # GPU backend library: kernels (.cu) + the CudaExecutor (.cpp, host code that
 # dispatches graph nodes to the kernels). Links the CPU core (mtrt) for the Graph
 # IR / model loader it reuses.
-add_library(mtrt_cuda STATIC kernels.cu gemm_cuda.cu cuda_executor.cpp)
+add_library(mtrt_cuda STATIC
+  kernels.cu gemm_cuda.cu flash_attention.cu gemm_fp16.cu cuda_executor.cpp)
 target_include_directories(mtrt_cuda PUBLIC
   ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR})
 target_link_libraries(mtrt_cuda PUBLIC CUDA::cudart CUDA::cublas mtrt)
@@ -44,3 +45,8 @@ target_compile_definitions(cuda_model_test PRIVATE
 add_executable(bench_gemm_cuda bench_gemm_cuda.cu)
 target_include_directories(bench_gemm_cuda PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(bench_gemm_cuda PRIVATE mtrt_cuda)
+
+# H FP16 tensor-core GEMM roofline: our WMMA kernel vs cuBLAS FP16 vs FP32.
+add_executable(bench_gemm_fp16 bench_gemm_fp16.cu)
+target_include_directories(bench_gemm_fp16 PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(bench_gemm_fp16 PRIVATE mtrt_cuda)

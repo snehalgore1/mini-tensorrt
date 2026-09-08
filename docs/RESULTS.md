@@ -141,6 +141,39 @@ in topo order on one stream).
 **86.8 MB reused, a 98% reduction** — and the whole model still produces identical tokens
 (`argmax_mism=0`), so the reuse preserves numerics on the GPU. Measured by `cuda_model_test`.
 
+### GPU FlashAttention (F-GPU) and FP16 tensor cores (H) — pending Colab measurement
+
+The CUDA kernels for both are **implemented and wired to tests** but not yet measured here:
+this development machine is an Apple M1 (no NVIDIA GPU), and per the project's prime directive
+a number is only recorded once measured. Both run on a Colab T4 — see `colab/README.md` — and
+the results go here once captured.
+
+- **F-GPU — CUDA FlashAttention** (`backends/cuda/flash_attention.cu`): the online-softmax
+  fused causal attention kernel, a GPU port of the CPU kernel, one thread per (head, query),
+  O(d) register scratch (no `[H,S,S]` materialization). Correctness is a real test —
+  `cuda_test` runs it against the *same* PyTorch golden as the CPU kernel (`op_flashattn_*`).
+
+  | Check (Colab T4) | Result |
+  |---|---|
+  | FlashAttn GPU vs PyTorch golden | pending Colab (`./build/backends/cuda/cuda_test`) |
+
+- **H — FP16 tensor-core GEMM** (`backends/cuda/gemm_fp16.cu`): a hand-written WMMA (16³)
+  kernel with FP32 accumulate, plus a cuBLAS FP16 tensor-op reference — the FP16 analogue of
+  the FP32 GPU roofline above. `bench_gemm_fp16` reports GFLOP/s for WMMA vs cuBLAS-FP16 vs
+  cuBLAS-FP32 and the FP16-vs-FP32 accuracy delta.
+
+  | N | wmma-f16 | cuBLAS-f16 | cuBLAS-f32 | wmma/cuBLAS-f16 |
+  |---|---|---|---|---|
+  | 512 / 1024 / 2048 | pending Colab | pending Colab | pending Colab | pending Colab |
+
+  Reproduce: `./build/backends/cuda/bench_gemm_fp16 --sizes 512,1024,2048`. Expected shape
+  (to be confirmed): cuBLAS FP16 on the T4's tensor cores is a large multiple of cuBLAS FP32
+  (~65 vs ~8.1 TFLOP/s peak), and our WMMA kernel reaches a fraction of cuBLAS FP16 — the same
+  "textbook kernel vs tuned library" story as tiled-vs-cuBLAS (FP32) and NEON-vs-Accelerate.
+
+  A full FP16 *model* path (running GPT-2 end to end in half precision through the executor)
+  is the larger next step beyond this GEMM-level study.
+
 ---
 
 ## Memory planning (Week 3)

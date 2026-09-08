@@ -182,11 +182,14 @@ kernel, GEMM autotuning, prefill/decode **throughput**, and an **ONNX frontend**
 frontend — loads `.onnx` into the same IR and matches ONNX Runtime bit-for-bit). Genuinely
 still ahead:
 
-- **FP16 tensor cores + a GPU FlashAttention kernel.** The FP32 GPU path establishes
-  correctness; FP16 on the T4's tensor cores is the real GPU inference fast path, and porting
-  the online-softmax attention kernel to CUDA is the natural next step.
+- **A full FP16 model path.** A WMMA FP16 tensor-core GEMM and a CUDA FlashAttention kernel
+  are **implemented and test-wired** (`backends/cuda/gemm_fp16.cu`, `flash_attention.cu`);
+  their T4 numbers are pending a Colab run (see `colab/README.md` and the RESULTS section) —
+  this dev machine has no NVIDIA GPU. Running GPT-2 end to end in FP16 through the executor
+  is the larger next step beyond the GEMM/attention kernels.
 - **Close the GPU GEMM gap.** The hand-written tiled SGEMM reaches ~15% of cuBLAS; register/
-  warp blocking and double-buffering are the remaining levers.
+  warp blocking and double-buffering are the remaining levers (the FP16 WMMA kernel is the
+  tensor-core version of the same study).
 - **Batched decode.** The executor is single-input by design; a batch dimension across
   sequences would raise the memory-bandwidth-bound decode utilization (see the throughput note).
 - **INT8 SIMD speedup.** Quantization currently wins on size; a NEON `SDOT` kernel with
