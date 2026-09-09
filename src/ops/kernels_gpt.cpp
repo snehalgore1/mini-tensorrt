@@ -127,7 +127,10 @@ void flash_attention_f32(const OpContext& ctx) {
   const float* k = K.data<float>();
   const float* v = V.data<float>();
   float* o = O.data<float>();
-  std::vector<float> acc(static_cast<size_t>(d));
+  // Grow-only thread-local scratch: keeps the op allocation-free in steady state
+  // (invariant 4) instead of heap-allocating per FlashAttention node.
+  static thread_local std::vector<float> acc;
+  if (acc.size() < static_cast<size_t>(d)) acc.resize(static_cast<size_t>(d));
 
   for (int64_t h = 0; h < H; ++h) {
     const float* qh = q + h * S * d;

@@ -91,13 +91,20 @@ void transpose_f32(const OpContext& ctx) {
   const int64_t rank = x.rank();
   MTRT_ASSERT(static_cast<int64_t>(perm.size()) == rank, "perm rank mismatch");
 
-  const std::vector<int64_t> in_strides = contiguous_strides(x.shape());
+  // Fixed-rank stack scratch (rank is tiny -- <=4 for our models). Keeps the op
+  // allocation-free in the executor hot path (invariant 4); it previously heap-
+  // allocated two vectors (strides + coords) on every Transpose node.
+  constexpr int kMaxRank = 8;
+  MTRT_ASSERT(rank <= kMaxRank, "Transpose rank exceeds supported max (8)");
+  int64_t in_strides[kMaxRank];
+  int64_t s = 1;
+  for (int64_t k = rank - 1; k >= 0; --k) { in_strides[k] = s; s *= x.shape()[k]; }
   const std::vector<int64_t>& out_shape = y.shape();
   const float* px = x.data<float>();
   float* py = y.data<float>();
   const int64_t n = y.numel();
 
-  std::vector<int64_t> co(static_cast<size_t>(rank), 0);
+  int64_t co[kMaxRank];
   for (int64_t idx = 0; idx < n; ++idx) {
     // decode idx -> out coords co (row-major over out_shape)
     int64_t rem = idx;

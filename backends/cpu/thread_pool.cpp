@@ -22,42 +22,20 @@ ThreadPool::~ThreadPool() {
 
 void ThreadPool::worker_loop() {
   for (;;) {
-    std::function<void()> task;
+    std::pair<int64_t, int64_t> range;
     {
       std::unique_lock<std::mutex> lock(mtx_);
-      cv_.wait(lock, [this] { return stop_ || !tasks_.empty(); });
-      if (stop_ && tasks_.empty()) return;
-      task = std::move(tasks_.front());
-      tasks_.pop();
+      cv_.wait(lock, [this] { return stop_ || next_ < ranges_.size(); });
+      if (stop_ && next_ >= ranges_.size()) return;
+      range = ranges_[next_++];  // claim one range
     }
-    task();
+    fn_tramp_(fn_ctx_, range.first, range.second);  // run the claimed range
     {
       std::lock_guard<std::mutex> lock(mtx_);
       if (--active_ == 0) done_cv_.notify_all();
     }
   }
 }
-
-void ThreadPool::parallel_for(int64_t n,
-                              const std::function<void(int64_t, int64_t)>& fn) {
-  if (n <= 0) return;
-  const int t = size();
-  // One chunk per worker (contiguous ranges); simple and cache-friendly.
-  const int64_t chunk = (n + t - 1) / t;
-  std::vector<std::pair<int64_t, int64_t>> ranges;
-  for (int64_t b = 0; b < n; b += chunk) ranges.emplace_back(b, std::min(b + chunk, n));
-
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    active_ += static_cast<int>(ranges.size());
-    for (const auto& r : ranges) {
-      tasks_.emplace([&fn, r] { fn(r.first, r.second); });
-    }
-  }
-  cv_.notify_all();
-
-  std::unique_lock<std::mutex> lock(mtx_);
-  done_cv_.wait(lock, [this] { return active_ == 0; });
-}
+// parallel_for is a template, defined inline in thread_pool.h (no std::function).
 
 }  // namespace mtrt

@@ -149,13 +149,22 @@ void pack_a(const float* A, int K, int ic, int mc, int pc, int kc, int mr,
       for (int ii = 0; ii < mr; ++ii)
         packA[idx++] = (ir + ii < mc) ? A[(ic + ir + ii) * K + pc + k] : 0.0f;
 }
+
+// Grow-only sizing for the thread-local packing scratch: never shrinks, so after
+// the first call at a given size the buffer is reused with no allocation. This is
+// what keeps Executor::run() allocation-free in steady state (invariant 4) --
+// the packing buffers were previously heap-allocated on every GEMM call.
+inline void ensure(std::vector<float>& v, size_t n) {
+  if (v.size() < n) v.resize(n);
+}
 }  // namespace
 
 // ---- 4. Panel packing: contiguous panels for a 4x4 scalar microkernel -----
 void gemm_packed(const float* A, const float* B, float* C, int M, int N, int K) {
   std::fill(C, C + static_cast<long>(M) * N, 0.0f);
-  std::vector<float> packA(static_cast<size_t>(MC) * KC);
-  std::vector<float> packB(static_cast<size_t>(KC) * NC);
+  static thread_local std::vector<float> packA, packB;  // reused across calls
+  ensure(packA, static_cast<size_t>(MC) * KC);
+  ensure(packB, static_cast<size_t>(KC) * NC);
   for (int jc = 0; jc < N; jc += NC) {
     const int nc = std::min(NC, N - jc);
     for (int pc = 0; pc < K; pc += KC) {
@@ -195,8 +204,9 @@ void gemm_neon_blocked(const float* A, const float* B, float* C, int M, int N, i
 #if defined(__ARM_NEON)
   constexpr int NMR = 8, NNR = 8;
   std::fill(C, C + static_cast<long>(M) * N, 0.0f);
-  std::vector<float> packA(static_cast<size_t>(bMC) * bKC);
-  std::vector<float> packB(static_cast<size_t>(bKC) * bNC);
+  static thread_local std::vector<float> packA, packB;  // reused across calls
+  ensure(packA, static_cast<size_t>(bMC) * bKC);
+  ensure(packB, static_cast<size_t>(bKC) * bNC);
   for (int jc = 0; jc < N; jc += bNC) {
     const int nc = std::min(bNC, N - jc);
     for (int pc = 0; pc < K; pc += bKC) {
