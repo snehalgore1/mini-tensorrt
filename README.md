@@ -176,9 +176,15 @@ See [`docs/RESULTS.md`](docs/RESULTS.md) and `colab/README.md`.
 ### Per-operator profile
 
 The profiler emits Chrome Trace Event JSON (viewable in
-[Perfetto](https://ui.perfetto.dev) or `chrome://tracing`):
+[Perfetto](https://ui.perfetto.dev) or `chrome://tracing`) — here, one GPT-2 transformer-block
+forward, showing the real attention + FFN op mix (LayerNorm, the Q/K/V/O `MatMul`s, head-split
+`Transpose`/`Reshape`, `BatchedMatMul` attention, `Softmax`, and the fused `GeluTanh` FFN):
 
-![per-operator flame chart](docs/images/flame_chart.png)
+![per-operator flame chart of a GPT-2 block](docs/images/flame_chart.png)
+
+Regenerate: `bench_model --model models/gpt2_block.json --trace gpt2_block.trace.json`, then
+open the JSON in Perfetto. The per-op time breakdown this reveals is in
+[`docs/RESULTS.md`](docs/RESULTS.md#gemm-in-the-model--per-op-profile-week-45-tie-in).
 
 ## What it does not do
 
