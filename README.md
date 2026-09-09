@@ -2,13 +2,16 @@
 
 [![ci](https://github.com/snehalgore1/mini-tensorrt/actions/workflows/ci.yml/badge.svg)](https://github.com/snehalgore1/mini-tensorrt/actions/workflows/ci.yml)
 
-A lightweight C++ neural-network inference runtime, built from scratch to run **real GPT-2**.
+A from-scratch C++ inference runtime for transformer models. It lowers a model into a
+static-shape, frontend-agnostic IR, plans memory ahead of time, fuses and rewrites the graph,
+and executes it through **hand-written CPU (NEON SIMD, multithreaded) and GPU (CUDA) kernels** —
+each benchmarked against the vendor library it competes with (**Apple Accelerate, cuBLAS, ONNX
+Runtime**), with the remaining gap measured and explained rather than hidden.
 
-It loads a model into a frontend-agnostic IR, executes a small hand-written FP32 operator
-set on CPU, and applies the optimizations a production runtime does — ahead-of-time memory
-planning, operator fusion, a tuned SIMD GEMM, and a KV-cache. It exists to answer one
-question end to end: *what actually happens below PyTorch, and how much of the gap to a real
-runtime can you close by hand?*
+It runs **real GPT-2-small (124M)** end to end, matching HuggingFace token-for-token — the
+proof that the whole pipeline is correct. The guiding question: *what actually happens below
+PyTorch, and how much of the gap to a production runtime can you close by hand — measured, not
+asserted?*
 
 ## It runs real GPT-2 and matches HuggingFace
 
@@ -149,16 +152,26 @@ Incremental decode caches each layer's K/V instead of recomputing the whole grap
 **1.87× faster generation with byte-identical output**, verified against the full-recompute
 path (`run_gpt2 --mode bench`).
 
-### Runs on a GPU too (CUDA)
+### Runs on a GPU (CUDA)
 
-The same `Graph` IR runs on a CUDA backend (all gated behind `-DMTRT_CUDA=ON`; the CPU build
-is untouched). A `CudaExecutor` uploads weights once and dispatches each node to a CUDA
-kernel (elementwise/LayerNorm/CausalSoftmax/Gather hand-written; matmul via cuBLAS). On a
-Tesla T4, **real GPT-2 124M runs end to end on the GPU in ~22 ms and produces the same
-next-token predictions as the CPU** (0 argmax mismatches, max logit error 3.97e-4). A
-hand-written shared-memory tiled SGEMM is also benchmarked against cuBLAS with the T4
-roofline (naive → tiled ≈ 2.3×; tiled ≈ 15% of cuBLAS, gap explained). See `docs/RESULTS.md`
-and `colab/README.md`.
+The same `Graph` IR runs unchanged on a CUDA backend (gated behind `-DMTRT_CUDA=ON`; the CPU
+build is untouched). A `CudaExecutor` uploads weights once and dispatches each node to a CUDA
+kernel (elementwise / LayerNorm / CausalSoftmax / Gather hand-written; MatMul via cuBLAS).
+Measured on a Tesla T4:
+
+- **Whole model** — real GPT-2 124M runs end to end in **~22 ms**, with the same next-token
+  predictions as the CPU (0 argmax mismatches, max logit error 3.97e-4).
+- **FP16 tensor cores (WMMA)** — a hand-written 16³ WMMA GEMM, validated bit-identical against
+  cuBLAS FP16. cuBLAS FP16 reaches **34 TFLOP/s (~52% of the T4's ~65 TFLOP/s tensor-core peak,
+  8× over FP32)**; my kernel reaches ~8% of that — and the writeup measures *why*: without
+  shared-memory staging it goes **memory-bound and starves the tensor cores** (faster math makes
+  data movement the bottleneck).
+- **Fused attention** — the FlashAttention online-softmax kernel ported to CUDA, validated
+  against the same PyTorch golden as the CPU version (max abs error 1.2e-7).
+- **FP32 SGEMM roofline** — a shared-memory tiled kernel vs cuBLAS (naive → tiled ≈ 2.3×;
+  tiled ≈ 15% of cuBLAS, gap explained).
+
+See [`docs/RESULTS.md`](docs/RESULTS.md) and `colab/README.md`.
 
 ### Per-operator profile
 
