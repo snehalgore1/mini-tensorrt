@@ -8,6 +8,22 @@ are not reproducible.
 
 ---
 
+## Headline results
+
+The full detail (methodology, caveats, reproduce commands) is in the sections below; these
+are the results worth opening the repo for — all measured on the hardware in **Environment**,
+all reproducible:
+
+| Result | Measured | |
+|---|---|---|
+| Real GPT-2 124M vs HuggingFace | **0 / 64** next-token mismatches, max logit err 4.3e-4 | [details](#real-gpt-2-124m--end-to-end-real-workload-2) |
+| GEMM ladder (FP32, M1 Pro) | **1.7 → 310 GFLOP/s (~180×)**, ~87% of 1-core NEON peak; Accelerate gap is the AMX ceiling | [details](#gemm-optimization-ladder-week-5) |
+| GPT-2 block, full ladder | **56× faster, 12.5× smaller** vs naive (2281 → 40.7 ms; 28 → 2.25 MB) | [details](#full-benchmark-matrix-week-8) |
+| INT8 quantization of GPT-2 | **per-channel recovers it — 8.8× lower error than per-tensor** at 4× weight compression | [details](#int8-weight-quantization-5) |
+| Real GPT-2 on a Tesla T4 (GPU) | **~22 ms** end to end; FP16 tensor cores ~8× over FP32 | [details](#gpu-backend--real-gpt-2-on-a-cuda-gpu-1) |
+
+---
+
 ## Environment
 
 | Field | Value |
@@ -191,106 +207,6 @@ larger next step beyond this GEMM-level study.
 
 ---
 
-## Memory planning (Week 3)
-
-| Model | Configuration | Peak intermediate bytes | Alloc count | Bytes reused | Reduction |
-|---|---|---|---|---|---|
-| MLP | Naive per-op allocator | 224 | 5 | 0 | — |
-| MLP | Greedy arena planner | 128 | 1 | 96 | 43% |
-| GPT-2 block (2 layers) | Naive per-op allocator | 29,491,200 (28.1 MB) | 51 | 0 | — |
-| GPT-2 block (2 layers) | Greedy arena planner | 3,538,944 (3.4 MB) | 1 | 25,952,256 (24.8 MB) | **88%** |
-
-MLP intermediates (t0..t4): three [1,16] (64 B) and two [1,4] (16 B). The naive
-allocator gives each its own buffer (224 B, 5 allocations). The greedy-by-size
-planner reuses space between tensors whose lifetimes don't overlap, packing them
-into a single 128 B arena (1 allocation) -- a 43% reduction, 96 B reused.
-
-**The MLP is too small for the absolute numbers to mean anything (96 B).** The
-GPT-2-small block (S=128, D=768, H=12, FFN=3072, 2 layers) is where the planner
-earns its keep: 51 intermediates totalling **28.1 MB** under the naive allocator
-collapse into a single **3.4 MB** arena -- an **88% reduction, 24.8 MB reused**.
-The deeper win vs the MLP is structural: a transformer is a long chain of
-mostly single-consumer intermediates (projections, attention scratch, the
-[128,3072] FFN activations), so most lifetimes are disjoint and the arena packs
-them tightly. Measured by `MemoryPlanner.ReportStats` / `ReportStatsGpt2`
-(16-byte aligned slots). Outputs, inputs, and weights are excluded (identical
-under both allocators). The GPT-2 model is regenerated, not committed
-(`python/export_models.py`); the test skips when it is absent.
-
----
-
-## Fusion (Week 4)
-
-| Model | Configuration | p50 latency | p95 latency | Peak intermediate bytes |
-|---|---|---|---|---|
-| MLP | Unfused | ~330 ns | ~375 ns | 128 |
-| MLP | MatMul+Bias+Gelu fused | ~290 ns | ~334 ns | 80 |
-| GPT-2 block | Unfused | ~73.3 ms | ~77.9 ms | 3,538,944 (3.4 MB) |
-| GPT-2 block | +FFN fused (MatMul+Bias+GeluTanh) | ~72.0 ms | ~75.3 ms | 2,359,296 (2.25 MB) |
-
-MLP measured by `bench_model --iters 5000`; GPT-2 by `bench_model --model
-models/gpt2_block.json --warmup 20 --iters 200` (Release, Apple M1 Pro), median of
-several runs. **Honest reading:** fusion's win here is **memory, not latency**, at
-both sizes. On the MLP it cuts planned peak 128 B -> 80 B (37.5%); on the GPT-2
-block the per-layer FFN Linear->Bias->GeluTanh collapses into one node, cutting
-peak intermediate memory **3.4 MB -> 2.25 MB (33%)**. The latency delta is small
-and near the noise floor (MLP: ~15% of nanoseconds; GPT-2: ~1-2% of ~73 ms) and
-the fused path is never slower. This is expected once the MatMul runs on the tuned
-GEMM (below): the fused epilogue saves an intermediate write/read of the FFN
-activation, but the matmul FLOPs dominate, so the memory saving shows up far more
-clearly than the latency one. Fusion is validated primarily as a *memory and
-IR-rewrite* win. (The GPT-2 FFN uses tanh-approx GELU, GPT-2's "gelu_new", hence
-the `FusedMatMulBiasGeluTanh` variant.)
-
----
-
-## GEMM in the model + per-op profile (Week 4/5 tie-in)
-
-The Week-5 GEMM ladder was previously reachable only from `bench_gemm`; the model
-executor's `MatMul` ran the naive triple loop. Wiring the tuned ladder
-(`gemm_auto`: packed 8x8 NEON microkernel, multithreaded above a size threshold)
-into the `MatMul` (and fused) kernels makes it accelerate a real model.
-`MTRT_MATMUL=naive|neon|threaded` overrides the dispatch (naive = the ablation
-baseline).
-
-| GPT-2 block, MatMul path | p50 latency (unfused) | Speedup |
-|---|---|---|
-| `MTRT_MATMUL=naive` (triple loop) | ~2,289 ms | 1.0x |
-| default (NEON microkernel + threaded) | ~73.3 ms | **~31x** |
-
-**Profile-driven step: tuning `BatchedMatMul`.** With `MatMul` tuned, the profiler
-flagged attention's `BatchedMatMul` (QKᵀ and attn·V) as the single hottest op --
-it was still the naive triple loop. Routing each batch slice through the same
-`gemm_auto` (both attention products are plain `[M,K]@[K,N]` per head, since the
-operand is pre-transposed) collapses it. Before/after, same machine, one
-representative run each (`bench_model --model models/gpt2_block.json --warmup 20
---iters 200 --trace`):
-
-| Op | Before (naive BMM) | After (tuned BMM) |
-|---|---|---|
-| BatchedMatMul | 33.7 ms (47.5%) | **3.9 ms (9.8%)** — ~8.6× |
-| MatMul | 29.1 ms (41.0%) | 27.3 ms (**69.0%**) |
-| Transpose | 2.9 ms (4.0%) | 2.8 ms (7.1%) |
-| GeluTanh | 2.5 ms (3.4%) | 2.7 ms (6.8%) |
-| Softmax / LayerNorm / Add / Reshape / Scale | <1.3 ms each | <1.3 ms each |
-| **Whole block, p50 (unfused)** | **70.3 ms** | **40.7 ms** |
-
-**Reading (profile before optimizing).** The profiler predicted this would "roughly
-halve the remaining runtime," and it did: the block drops **70.3 → 40.7 ms p50
-(1.73×)** off a single op change, because `BatchedMatMul` itself goes **8.6× faster**
-(33.7 → 3.9 ms). The bottleneck then shifts back to `MatMul` (now 69% — projections +
-FFN, the largest FLOP contributor), which is the expected steady state: the two dense
-matmul families dominate, and both now run the tuned NEON ladder. Whole-model
-correctness is unchanged — `Gpt2Real.LogitsMatchHuggingFace` still passes (0 argmax
-mismatches vs HuggingFace), so the reassociation from the blocked kernel stays within
-tolerance. `MTRT_MATMUL=naive` still forces both back to the triple loop for the ablation.
-
-Per-operator flame chart: generate with `bench_model --model
-models/gpt2_block.json --trace gpt2.trace.json` and open in chrome://tracing or
-Perfetto (trace files are gitignored, regenerable).
-
----
-
 ## GEMM optimization ladder (Week 5)
 
 Problem size: **N = 1024** (square, FP32). Measured ceilings on this machine
@@ -361,6 +277,99 @@ Pro's large L2, so bigger panels amortize packing and B-reload without spilling 
 the kernel is compute-bound, not L2-capacity-bound, at these sizes. Applying 128/512/512 to
 `gemm_neon` lifts single-core NEON to **~85 GFLOP/s ≈ 87% of the 1-core peak** (from ~79%),
 the one honest lever over the AMX-bound Accelerate gap. Reproduce: `./build/benchmarks/bench_autotune`.
+
+---
+
+## GEMM in the model + per-op profile (Week 4/5 tie-in)
+
+The Week-5 GEMM ladder was previously reachable only from `bench_gemm`; the model
+executor's `MatMul` ran the naive triple loop. Wiring the tuned ladder
+(`gemm_auto`: packed 8x8 NEON microkernel, multithreaded above a size threshold)
+into the `MatMul` (and fused) kernels makes it accelerate a real model.
+`MTRT_MATMUL=naive|neon|threaded` overrides the dispatch (naive = the ablation
+baseline).
+
+| GPT-2 block, MatMul path | p50 latency (unfused) | Speedup |
+|---|---|---|
+| `MTRT_MATMUL=naive` (triple loop) | ~2,289 ms | 1.0x |
+| default (NEON microkernel + threaded) | ~73.3 ms | **~31x** |
+
+**Profile-driven step: tuning `BatchedMatMul`.** With `MatMul` tuned, the profiler
+flagged attention's `BatchedMatMul` (QKᵀ and attn·V) as the single hottest op --
+it was still the naive triple loop. Routing each batch slice through the same
+`gemm_auto` (both attention products are plain `[M,K]@[K,N]` per head, since the
+operand is pre-transposed) collapses it. Before/after, same machine, one
+representative run each (`bench_model --model models/gpt2_block.json --warmup 20
+--iters 200 --trace`):
+
+| Op | Before (naive BMM) | After (tuned BMM) |
+|---|---|---|
+| BatchedMatMul | 33.7 ms (47.5%) | **3.9 ms (9.8%)** — ~8.6× |
+| MatMul | 29.1 ms (41.0%) | 27.3 ms (**69.0%**) |
+| Transpose | 2.9 ms (4.0%) | 2.8 ms (7.1%) |
+| GeluTanh | 2.5 ms (3.4%) | 2.7 ms (6.8%) |
+| Softmax / LayerNorm / Add / Reshape / Scale | <1.3 ms each | <1.3 ms each |
+| **Whole block, p50 (unfused)** | **70.3 ms** | **40.7 ms** |
+
+**Reading (profile before optimizing).** The profiler predicted this would "roughly
+halve the remaining runtime," and it did: the block drops **70.3 → 40.7 ms p50
+(1.73×)** off a single op change, because `BatchedMatMul` itself goes **8.6× faster**
+(33.7 → 3.9 ms). The bottleneck then shifts back to `MatMul` (now 69% — projections +
+FFN, the largest FLOP contributor), which is the expected steady state: the two dense
+matmul families dominate, and both now run the tuned NEON ladder. Whole-model
+correctness is unchanged — `Gpt2Real.LogitsMatchHuggingFace` still passes (0 argmax
+mismatches vs HuggingFace), so the reassociation from the blocked kernel stays within
+tolerance. `MTRT_MATMUL=naive` still forces both back to the triple loop for the ablation.
+
+Per-operator flame chart: generate with `bench_model --model
+models/gpt2_block.json --trace gpt2.trace.json` and open in chrome://tracing or
+Perfetto (trace files are gitignored, regenerable).
+
+---
+
+## Full benchmark matrix (Week 8)
+
+The cumulative optimization ladder on the **GPT-2-small block** (2 layers, S=128, D=768,
+H=12, FFN=3072 — the same model as the memory/fusion tables above), plus the PyTorch-eager
+reference. Each MiniTensorRT row adds **one** optimization to the row above it. Latency is
+p50/p95 wall time per forward (`bench_model --model models/gpt2_block.json`, warm, steady
+state, setup/parse excluded); the GEMM variant is selected with `MTRT_MATMUL`.
+
+| System | p50 (ms) | p95 (ms) | Peak mem | What changed |
+|---|---|---|---|---|
+| PyTorch eager (Accelerate, 6 thr) | **6.7** | 7.8 | — (framework allocator) | high-level reference |
+| ONNX Runtime CPU (MLAS) | **11.9** | 12.5 | — (framework allocator) | optimized graph-opt reference |
+| MiniTensorRT naive | 2281 | 2343 | 28.1 MB | triple-loop GEMM, naive per-op allocator |
+| + memory planner | 2281 | 2343 | **3.4 MB** | greedy arena — memory only, latency unchanged |
+| + fusion | 2229 | 2292 | **2.25 MB** | FFN MatMul+Bias+GeluTanh fused (memory again) |
+| + SIMD GEMM (NEON 8×8) | **63.8** | 66.9 | 2.25 MB | packed NEON microkernel — **36× latency** |
+| + threading (8 cores) | **40.9** | 45.2 | 2.25 MB | multithreaded over tiles — 1.6× more |
+
+The `MiniTensorRT naive` and `+ memory planner` rows show identical latency **by
+construction, not coincidence**: the arena planner changes only *where* intermediates live,
+never the compute path, so both rows run the same kernels — only peak memory differs. (The
+executor is also allocation-free in that compute path; a warm `run()` heap-allocates only the
+returned output vector, enforced by the `AllocInvariant` test.)
+
+**Reading.** The ladder isolates each optimization on the axis it actually moves: the
+memory planner and fusion cut peak memory **28.1 → 3.4 → 2.25 MB (12.5×)** with latency flat
+(they are memory/IR-rewrite wins — see the Fusion section), while the NEON microkernel
+and threading cut latency **2281 → 40.9 ms (56×)** with memory flat. End to end MiniTensorRT
+goes from a correctness baseline to **56× faster and 12.5× smaller**. Both production runtimes
+still win: PyTorch eager by **~6×** (6.7 ms) and ONNX Runtime by **~3.4×** (11.9 ms). This is
+the same AMX story as the GEMM ladder — PyTorch dispatches to Accelerate, which uses Apple's
+on-die matrix coprocessor (~3× above the entire NEON roofline, unreachable from portable NEON);
+ORT's MLAS CPU kernels don't hit AMX, so it lands between PyTorch and us, its edge coming from
+graph-level fusion and hand-tuned kernels. The gap we *can* close, we did; the rest is AMX and
+years of kernel engineering.
+
+All latencies measured after warm-up, steady state, setup and parse time excluded.
+Reproduce: PyTorch row `python python/bench_torch_block.py`; ONNX Runtime row `python
+python/bench_ort_block.py`; MiniTensorRT rows `MTRT_MATMUL={naive,neon,threaded}
+./build/benchmarks/bench_model --model models/gpt2_block.json` (naive-allocator peak from
+`MemoryPlanner.ReportStatsGpt2`). ORT and PyTorch time the *same* block; ORT via a
+torch.onnx export, run through ONNX Runtime (a reference baseline — distinct from
+MiniTensorRT's own ONNX frontend, proven on the MLP in the ONNX frontend section).
 
 ---
 
@@ -453,6 +462,59 @@ The prefill path benefits directly from the tuned `MatMul`/`BatchedMatMul` above
 
 ---
 
+## Memory planning (Week 3)
+
+| Model | Configuration | Peak intermediate bytes | Alloc count | Bytes reused | Reduction |
+|---|---|---|---|---|---|
+| MLP | Naive per-op allocator | 224 | 5 | 0 | — |
+| MLP | Greedy arena planner | 128 | 1 | 96 | 43% |
+| GPT-2 block (2 layers) | Naive per-op allocator | 29,491,200 (28.1 MB) | 51 | 0 | — |
+| GPT-2 block (2 layers) | Greedy arena planner | 3,538,944 (3.4 MB) | 1 | 25,952,256 (24.8 MB) | **88%** |
+
+MLP intermediates (t0..t4): three [1,16] (64 B) and two [1,4] (16 B). The naive
+allocator gives each its own buffer (224 B, 5 allocations). The greedy-by-size
+planner reuses space between tensors whose lifetimes don't overlap, packing them
+into a single 128 B arena (1 allocation) -- a 43% reduction, 96 B reused.
+
+**The MLP is too small for the absolute numbers to mean anything (96 B).** The
+GPT-2-small block (S=128, D=768, H=12, FFN=3072, 2 layers) is where the planner
+earns its keep: 51 intermediates totalling **28.1 MB** under the naive allocator
+collapse into a single **3.4 MB** arena -- an **88% reduction, 24.8 MB reused**.
+The deeper win vs the MLP is structural: a transformer is a long chain of
+mostly single-consumer intermediates (projections, attention scratch, the
+[128,3072] FFN activations), so most lifetimes are disjoint and the arena packs
+them tightly. Measured by `MemoryPlanner.ReportStats` / `ReportStatsGpt2`
+(16-byte aligned slots). Outputs, inputs, and weights are excluded (identical
+under both allocators). The GPT-2 model is regenerated, not committed
+(`python/export_models.py`); the test skips when it is absent.
+
+---
+
+## Fusion (Week 4)
+
+| Model | Configuration | p50 latency | p95 latency | Peak intermediate bytes |
+|---|---|---|---|---|
+| MLP | Unfused | ~330 ns | ~375 ns | 128 |
+| MLP | MatMul+Bias+Gelu fused | ~290 ns | ~334 ns | 80 |
+| GPT-2 block | Unfused | ~73.3 ms | ~77.9 ms | 3,538,944 (3.4 MB) |
+| GPT-2 block | +FFN fused (MatMul+Bias+GeluTanh) | ~72.0 ms | ~75.3 ms | 2,359,296 (2.25 MB) |
+
+MLP measured by `bench_model --iters 5000`; GPT-2 by `bench_model --model
+models/gpt2_block.json --warmup 20 --iters 200` (Release, Apple M1 Pro), median of
+several runs. **Honest reading:** fusion's win here is **memory, not latency**, at
+both sizes. On the MLP it cuts planned peak 128 B -> 80 B (37.5%); on the GPT-2
+block the per-layer FFN Linear->Bias->GeluTanh collapses into one node, cutting
+peak intermediate memory **3.4 MB -> 2.25 MB (33%)**. The latency delta is small
+and near the noise floor (MLP: ~15% of nanoseconds; GPT-2: ~1-2% of ~73 ms) and
+the fused path is never slower. This is expected once the MatMul runs on the tuned
+GEMM (below): the fused epilogue saves an intermediate write/read of the FFN
+activation, but the matmul FLOPs dominate, so the memory saving shows up far more
+clearly than the latency one. Fusion is validated primarily as a *memory and
+IR-rewrite* win. (The GPT-2 FFN uses tanh-approx GELU, GPT-2's "gelu_new", hence
+the `FusedMatMulBiasGeluTanh` variant.)
+
+---
+
 ## ONNX frontend — a second real frontend (Week 6)
 
 The runtime now has a **second frontend** that ingests real `.onnx` files, alongside the
@@ -477,49 +539,3 @@ file's `value_info`, populated by `onnx.shape_inference.infer_shapes` at export,
 static-shape invariant). Measured by `OnnxFrontend.*` (built only when `MTRT_ONNX=ON`).
 Conv/pooling operators and a CNN remain out of scope — the frontend-agnostic claim is proven
 without them.
-
----
-
-## Full benchmark matrix (Week 8)
-
-The cumulative optimization ladder on the **GPT-2-small block** (2 layers, S=128, D=768,
-H=12, FFN=3072 — the same model as the memory/fusion tables above), plus the PyTorch-eager
-reference. Each MiniTensorRT row adds **one** optimization to the row above it. Latency is
-p50/p95 wall time per forward (`bench_model --model models/gpt2_block.json`, warm, steady
-state, setup/parse excluded); the GEMM variant is selected with `MTRT_MATMUL`.
-
-| System | p50 (ms) | p95 (ms) | Peak mem | What changed |
-|---|---|---|---|---|
-| PyTorch eager (Accelerate, 6 thr) | **6.7** | 7.8 | — (framework allocator) | high-level reference |
-| ONNX Runtime CPU (MLAS) | **11.9** | 12.5 | — (framework allocator) | optimized graph-opt reference |
-| MiniTensorRT naive | 2281 | 2343 | 28.1 MB | triple-loop GEMM, naive per-op allocator |
-| + memory planner | 2281 | 2343 | **3.4 MB** | greedy arena — memory only, latency unchanged |
-| + fusion | 2229 | 2292 | **2.25 MB** | FFN MatMul+Bias+GeluTanh fused (memory again) |
-| + SIMD GEMM (NEON 8×8) | **63.8** | 66.9 | 2.25 MB | packed NEON microkernel — **36× latency** |
-| + threading (8 cores) | **40.9** | 45.2 | 2.25 MB | multithreaded over tiles — 1.6× more |
-
-The `MiniTensorRT naive` and `+ memory planner` rows show identical latency **by
-construction, not coincidence**: the arena planner changes only *where* intermediates live,
-never the compute path, so both rows run the same kernels — only peak memory differs. (The
-executor is also allocation-free in that compute path; a warm `run()` heap-allocates only the
-returned output vector, enforced by the `AllocInvariant` test.)
-
-**Reading.** The ladder isolates each optimization on the axis it actually moves: the
-memory planner and fusion cut peak memory **28.1 → 3.4 → 2.25 MB (12.5×)** with latency flat
-(they are memory/IR-rewrite wins, as the fusion section explains), while the NEON microkernel
-and threading cut latency **2281 → 40.9 ms (56×)** with memory flat. End to end MiniTensorRT
-goes from a correctness baseline to **56× faster and 12.5× smaller**. Both production runtimes
-still win: PyTorch eager by **~6×** (6.7 ms) and ONNX Runtime by **~3.4×** (11.9 ms). This is
-the same AMX story as the GEMM ladder — PyTorch dispatches to Accelerate, which uses Apple's
-on-die matrix coprocessor (~3× above the entire NEON roofline, unreachable from portable NEON);
-ORT's MLAS CPU kernels don't hit AMX, so it lands between PyTorch and us, its edge coming from
-graph-level fusion and hand-tuned kernels. The gap we *can* close, we did; the rest is AMX and
-years of kernel engineering.
-
-All latencies measured after warm-up, steady state, setup and parse time excluded.
-Reproduce: PyTorch row `python python/bench_torch_block.py`; ONNX Runtime row `python
-python/bench_ort_block.py`; MiniTensorRT rows `MTRT_MATMUL={naive,neon,threaded}
-./build/benchmarks/bench_model --model models/gpt2_block.json` (naive-allocator peak from
-`MemoryPlanner.ReportStatsGpt2`). ORT and PyTorch time the *same* block; ORT via a
-torch.onnx export, run through ONNX Runtime (a reference baseline — distinct from
-MiniTensorRT's own ONNX frontend, proven on the MLP in the ONNX frontend section).
