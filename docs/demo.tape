@@ -15,6 +15,8 @@ Set Padding 20
 Set Theme "Dracula"
 
 Type "python python/gpt2_generate.py --prompt 'The quick brown fox' --max-new 20"
-Sleep 500ms
+Sleep 1s
 Enter
-Sleep 8s
+# ~8.6s to load the 652 MB model + generate; hold past that so the output lands,
+# then a beat to read it.
+Sleep 13s

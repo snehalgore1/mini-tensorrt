@@ -30,8 +30,9 @@ The quick brown foxes are a great way to get a little bit of a kick out of your 
 [CHECK] our gen ids == HF gen ids: True
 ```
 
-<!-- Record the animated demo with `vhs docs/demo.tape` (produces docs/demo.gif). -->
-<!-- ![demo](docs/demo.gif) -->
+![real GPT-2 generating text on MiniTensorRT](docs/demo.gif)
+
+<!-- Regenerate with `vhs docs/demo.tape` (needs the exported model + torch/transformers). -->
 
 **Correctness is proven, not asserted:** a golden test checks our logits against HuggingFace
 (0 / 64 next-token argmax mismatches, max abs error 4.3e-4), and generation is checked
