@@ -320,6 +320,16 @@ register blocking alone collapses to ~10 GFLOP/s (B no longer fits cache) while 
 tiling holds at ~26** — i.e. tiling earns its keep exactly when the working set stops
 fitting. Threading adds ~4x over single-core NEON (not 8x — see below).
 
+**These per-step numbers are compiler-specific, and that is itself the point.** The scalar
+register/tiling/packing steps depend entirely on what the compiler auto-vectorizes. On
+GCC 13 / x86 the same ladder measures reorder ~9.6, register **~2.2**, tiled ~5.5 GFLOP/s —
+steps 2–4 go *backwards*, because the hand-written 4x4 scalar microkernel actively **defeats
+the auto-vectorization that the plain `ikj` reorder enables**. That is the real lesson of the
+scalar tier: a "smarter" scalar kernel can lose to a naive loop the compiler vectorizes for
+free, and the only portable way to guarantee the SIMD win is to write the vector kernel
+explicitly (the NEON step), which is compiler-independent. (Numbers above are Apple Clang /
+M1 Pro; the ladder is regenerated per machine.)
+
 **Remaining gap to Accelerate, explained.** Threaded reaches ~310 GFLOP/s vs Accelerate's
 ~2319 — about **13% of Accelerate**. The dominant reason is **AMX**: Accelerate dispatches
 to Apple's on-die matrix coprocessor, which is not a public instruction set and is
@@ -487,6 +497,12 @@ state, setup/parse excluded); the GEMM variant is selected with `MTRT_MATMUL`.
 | + fusion | 2229 | 2292 | **2.25 MB** | FFN MatMul+Bias+GeluTanh fused (memory again) |
 | + SIMD GEMM (NEON 8×8) | **63.8** | 66.9 | 2.25 MB | packed NEON microkernel — **36× latency** |
 | + threading (8 cores) | **40.9** | 45.2 | 2.25 MB | multithreaded over tiles — 1.6× more |
+
+The `MiniTensorRT naive` and `+ memory planner` rows show identical latency **by
+construction, not coincidence**: the arena planner changes only *where* intermediates live,
+never the compute path, so both rows run the same kernels — only peak memory differs. (The
+executor is also allocation-free in that compute path; a warm `run()` heap-allocates only the
+returned output vector, enforced by the `AllocInvariant` test.)
 
 **Reading.** The ladder isolates each optimization on the axis it actually moves: the
 memory planner and fusion cut peak memory **28.1 → 3.4 → 2.25 MB (12.5×)** with latency flat

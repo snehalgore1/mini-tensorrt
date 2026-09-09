@@ -145,8 +145,13 @@ int main(int argc, char** argv) {
                                            std::vector<double>(sizes.size(), 0.0 / 0.0));
   std::vector<double> accel(sizes.size(), 0.0 / 0.0);
 
-  printf("peak NEON FMA (1 core): %.1f GFLOP/s   peak BW (triad): %.1f GB/s\n",
-         peak_fma, peak_bw);
+  // peak_fma is measured only on ARM/NEON; print n/a elsewhere rather than 0.0.
+  if (peak_fma > 0.0)
+    printf("peak NEON FMA (1 core): %.1f GFLOP/s   peak BW (triad): %.1f GB/s\n",
+           peak_fma, peak_bw);
+  else
+    printf("peak NEON FMA (1 core): n/a (non-ARM build)   peak BW (triad): %.1f GB/s\n",
+           peak_bw);
   printf("%-10s", "size");
   for (auto& v : variants) printf("%10s", v.name);
   printf("%12s\n", "Accelerate");
