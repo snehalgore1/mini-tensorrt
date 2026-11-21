@@ -162,3 +162,12 @@ behind runtime flags.
 requires running the same model with each optimization independently disabled. Deleting
 the naive path destroys the ability to make measured claims, which is the entire point
 of the project.
+
+---
+
+## MoE track
+
+The GPT-OSS MoE layer's design decisions (op split, dispatch layout, scratch-free counting
+sort, tolerance rule, GEMM scratch warm-up, typed arena views) are logged in
+[ENGINEERING_DECISIONS.md](ENGINEERING_DECISIONS.md). They extend D4, D5, D8, D9 and D11 here;
+none of them reverses those decisions.

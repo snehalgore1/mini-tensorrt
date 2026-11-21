@@ -1,6 +1,7 @@
 #pragma once
 
-// Minimal .npy reader for tests (DESIGN D8): float32, C-contiguous only. Keeps
+// Minimal .npy reader for tests (DESIGN D8): float32 (and int32 via load_npy_i32),
+// C-contiguous only. Keeps
 // the C++ test suite decoupled from Python -- fixtures are regenerated offline
 // and loaded here. Not part of the shipping library; test support only.
 
@@ -18,6 +19,7 @@ namespace mtrt::testing {
 struct NpyArray {
   std::vector<int64_t> shape;
   std::vector<float> data;
+  std::vector<int32_t> idata;  // filled instead of `data` for '<i4' files
 
   int64_t numel() const {
     int64_t n = 1;
@@ -26,7 +28,7 @@ struct NpyArray {
   }
 };
 
-inline NpyArray load_npy(const std::string& path) {
+inline NpyArray load_npy(const std::string& path, bool want_i32 = false) {
   std::ifstream f(path, std::ios::binary);
   if (!f) throw std::runtime_error("cannot open npy file: " + path);
 
@@ -53,9 +55,10 @@ inline NpyArray load_npy(const std::string& path) {
   std::string header(header_len, '\0');
   f.read(&header[0], header_len);
 
-  if (header.find("'<f4'") == std::string::npos) {
-    throw std::runtime_error("npy reader supports only little-endian float32: " +
-                             path);
+  const char* want = want_i32 ? "'<i4'" : "'<f4'";
+  if (header.find(want) == std::string::npos) {
+    throw std::runtime_error(std::string("npy file is not little-endian ") +
+                             (want_i32 ? "int32" : "float32") + ": " + path);
   }
   if (header.find("'fortran_order': False") == std::string::npos) {
     throw std::runtime_error("npy reader supports only C-order arrays: " + path);
@@ -80,9 +83,15 @@ inline NpyArray load_npy(const std::string& path) {
   }
   if (!tok.empty()) arr.shape.push_back(std::stoll(tok));
 
-  arr.data.resize(static_cast<std::size_t>(arr.numel()));
-  f.read(reinterpret_cast<char*>(arr.data.data()),
-         static_cast<std::streamsize>(arr.data.size() * sizeof(float)));
+  if (want_i32) {
+    arr.idata.resize(static_cast<std::size_t>(arr.numel()));
+    f.read(reinterpret_cast<char*>(arr.idata.data()),
+           static_cast<std::streamsize>(arr.idata.size() * sizeof(int32_t)));
+  } else {
+    arr.data.resize(static_cast<std::size_t>(arr.numel()));
+    f.read(reinterpret_cast<char*>(arr.data.data()),
+           static_cast<std::streamsize>(arr.data.size() * sizeof(float)));
+  }
   if (!f) throw std::runtime_error("npy file truncated: " + path);
   return arr;
 }
@@ -94,6 +103,11 @@ inline std::string golden_path(const std::string& name) {
 // Load a golden fixture by base name from the compiled-in goldens directory.
 inline NpyArray load_golden(const std::string& name) {
   return load_npy(golden_path(name));
+}
+
+// Load an int32 golden (MoE index tensors: idx, src, inv, offsets).
+inline NpyArray load_golden_i32(const std::string& name) {
+  return load_npy(golden_path(name), /*want_i32=*/true);
 }
 
 // True if a file exists and is readable. Used to skip tests for large, gitignored
@@ -112,6 +126,13 @@ inline bool golden_exists(const std::string& name) {
 inline Tensor tensor_from_npy(const NpyArray& a) {
   Tensor t = Tensor::owning(DType::kF32, a.shape);
   std::copy(a.data.begin(), a.data.end(), t.data<float>());
+  return t;
+}
+
+// Build a contiguous owning INT32 Tensor from an int32 NpyArray.
+inline Tensor tensor_from_npy_i32(const NpyArray& a) {
+  Tensor t = Tensor::owning(DType::kI32, a.shape);
+  std::copy(a.idata.begin(), a.idata.end(), t.data<int32_t>());
   return t;
 }
 

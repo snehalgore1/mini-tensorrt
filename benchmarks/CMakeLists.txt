@@ -14,3 +14,8 @@ if(APPLE)  # Accelerate (cblas_sgemm) reference is macOS-only; off macOS the col
   target_link_libraries(bench_gemm PRIVATE "-framework Accelerate")
 endif()
 target_compile_options(bench_gemm PRIVATE -Wall -Wextra)
+
+add_executable(bench_moe bench_moe.cpp)
+target_link_libraries(bench_moe PRIVATE mtrt)
+target_include_directories(bench_moe PRIVATE ${CMAKE_SOURCE_DIR})  # tests/support/moe_graph.h
+target_compile_options(bench_moe PRIVATE -Wall -Wextra)

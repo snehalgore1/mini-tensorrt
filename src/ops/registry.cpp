@@ -21,6 +21,7 @@ void register_builtin_kernels(KernelRegistry& registry) {
   register_fused_kernels(registry);
   register_transformer_kernels(registry);
   register_gpt_kernels(registry);
+  register_moe_kernels(registry);
 }
 
 }  // namespace mtrt

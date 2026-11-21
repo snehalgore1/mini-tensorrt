@@ -19,6 +19,7 @@ models/*.onnx.data
 !models/mlp.bin
 !models/mlp.onnx
 !models/transformer.bin
+!models/moe_layer.bin
 # The GPT-2-scale block is large (~57 MB weights, ~MB goldens): regenerate, don't commit.
 models/gpt2_block.json
 models/goldens/gpt2_*.npy

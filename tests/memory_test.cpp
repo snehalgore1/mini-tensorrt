@@ -141,3 +141,16 @@ TEST(MemoryPlanner, ReportStatsGpt2) {
   EXPECT_LT(ps.peak_bytes, ns.peak_bytes);
   EXPECT_EQ(ps.bytes_reused, ns.peak_bytes - ps.peak_bytes);
 }
+
+// MoE introduced the first non-f32 intermediates (int32 routing indices). Arena views must
+// carry the planned dtype rather than inherit the f32 buffer's, and still share storage.
+TEST(Arena, TypedViewsCarryTheirDtype) {
+  Arena arena(64);
+  Tensor f = arena.view_at(0, DType::kF32, {4});
+  Tensor i = arena.view_at(16, DType::kI32, {4});
+  EXPECT_EQ(f.dtype(), DType::kF32);
+  EXPECT_EQ(i.dtype(), DType::kI32);
+  i.data<int32_t>()[0] = 42;
+  Tensor i_again = arena.view_at(16, DType::kI32, {4});
+  EXPECT_EQ(i_again.data<int32_t>()[0], 42);  // same bytes, not a copy
+}

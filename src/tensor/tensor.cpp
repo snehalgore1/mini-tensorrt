@@ -50,6 +50,21 @@ Tensor Tensor::view(std::vector<int64_t> shape, std::vector<int64_t> strides,
   return v;
 }
 
+Tensor Tensor::view_bytes(DType dtype, std::vector<int64_t> shape,
+                          int64_t byte_offset) const {
+  MTRT_ASSERT(storage_ != nullptr, "view_bytes() on an empty tensor");
+  MTRT_ASSERT(byte_offset >= 0 &&
+                  byte_offset % static_cast<int64_t>(dtype_size(dtype)) == 0,
+              "view_bytes() offset must be aligned to the view dtype");
+  Tensor v;
+  v.dtype_ = dtype;
+  v.strides_ = contiguous_strides(shape);
+  v.shape_ = std::move(shape);
+  v.storage_ = storage_;  // refcount++, shares storage
+  v.data_ = data_ + byte_offset;
+  return v;
+}
+
 Tensor Tensor::reshape(std::vector<int64_t> shape) const {
   MTRT_ASSERT(is_contiguous(), "reshape() requires a contiguous tensor");
   MTRT_ASSERT(product(shape) == numel(), "reshape() element count mismatch");
