@@ -36,7 +36,9 @@ gtest_discover_tests(mtrt_tests)
 # the gtest binary). Asserts a warm Executor::run() does not allocate per node.
 add_executable(alloc_invariant_test alloc_invariant_test.cpp)
 target_link_libraries(alloc_invariant_test PRIVATE mtrt)
+target_include_directories(alloc_invariant_test PRIVATE ${CMAKE_SOURCE_DIR})
 target_compile_definitions(alloc_invariant_test PRIVATE
   MTRT_MODELS_DIR="${CMAKE_SOURCE_DIR}/models")
 target_compile_options(alloc_invariant_test PRIVATE -Wall -Wextra)
 add_test(NAME AllocInvariant COMMAND alloc_invariant_test)
+add_test(NAME AllocInvariantGemmFirstTouch COMMAND alloc_invariant_test gemm-first-touch)

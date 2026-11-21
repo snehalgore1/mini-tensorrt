@@ -8,6 +8,9 @@ ThreadPool::ThreadPool(int num_threads) {
   int n = num_threads > 0 ? num_threads
                           : static_cast<int>(std::thread::hardware_concurrency());
   if (n < 1) n = 1;
+  // parallel_for splits into at most n ranges, so reserving n here means ranges_ never
+  // grows (allocates) during a later parallel_for, whatever sizes it is called with.
+  ranges_.reserve(static_cast<std::size_t>(n));
   for (int i = 0; i < n; ++i) workers_.emplace_back([this] { worker_loop(); });
 }
 

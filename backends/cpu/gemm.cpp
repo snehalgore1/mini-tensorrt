@@ -1,6 +1,7 @@
 #include "backends/cpu/gemm.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -285,12 +286,44 @@ int matmul_mode() {
 }
 }  // namespace
 
+namespace {
+// The shared pool, with every thread's GEMM scratch created up front.
+//
+// The packing panels are `static thread_local` and grow-only, sized by the cache-block
+// constants (not by M, N, K), so each thread allocates them exactly once, on its first GEMM.
+// Workers claim row ranges dynamically, though, so WHICH workers have done a GEMM depends on
+// scheduling and on the largest M seen so far. A routing-dependent workload (MoE: expert
+// segment sizes change between runs) could therefore hit a cold worker -- and allocate --
+// inside a later Executor::run(). Warming them all here removes that dependence:
+//   * the calling thread runs one tiny GEMM (gemm_auto's single-core path uses its scratch);
+//   * the pool runs exactly size() ranges, and each range spins at a barrier until all
+//     size() ranges have been claimed. A worker blocked at the barrier cannot claim a second
+//     range, so the ranges land on size() DISTINCT workers, and each runs a tiny GEMM.
+// After this, the first gemm_auto call has created all GEMM scratch; tests/
+// alloc_invariant_test (gemm-first-touch) checks that a later large threaded GEMM allocates
+// nothing.
+ThreadPool& shared_warm_pool() {
+  static ThreadPool pool;
+  float a = 0.0f, b = 0.0f, c = 0.0f;
+  gemm_neon(&a, &b, &c, 1, 1, 1);  // calling thread
+  std::atomic<int> arrived{0};
+  const int t = pool.size();
+  pool.parallel_for(t, [&](int64_t, int64_t) {
+    arrived.fetch_add(1, std::memory_order_acq_rel);
+    while (arrived.load(std::memory_order_acquire) < t) std::this_thread::yield();
+    float wa = 0.0f, wb = 0.0f, wc = 0.0f;
+    gemm_neon(&wa, &wb, &wc, 1, 1, 1);  // this worker's thread_local panels
+  });
+  return pool;
+}
+}  // namespace
+
 void gemm_auto(const float* A, const float* B, float* C, int M, int N, int K) {
   const int mode = matmul_mode();
   if (mode == 0) return gemm_naive(A, B, C, M, N, K);
   if (mode == 1) return gemm_neon(A, B, C, M, N, K);
 
-  static ThreadPool pool;  // built once, shared across all MatMul calls
+  static ThreadPool& pool = shared_warm_pool();  // built + warmed once, on the first call
   // Thread only when there is enough work to amortize dispatch and enough rows
   // to split; otherwise the single-core NEON kernel wins.
   const long flops = 2L * M * N * K;
