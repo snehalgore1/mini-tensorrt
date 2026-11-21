@@ -152,3 +152,21 @@ Stop and reconsider if any of these happen:
 - Implementing an operator no model in `models/` uses
 - Optimizing a kernel the profiler has not flagged as hot
 - Week 5 running long. It is allowed to. Take time from Week 7, not from Week 8.
+
+---
+
+## MoE track (GPT-OSS Mixture-of-Experts layer study)
+
+Strictly two milestones. Full GPT-OSS-20B inference, MXFP4, expert parallelism and continuous
+batching are **out of scope**.
+
+- **1A: CPU correctness and runtime integration.**
+  - Semantics are verified against the official GPT-OSS `MLPBlock` (`docs/moe/SEMANTICS.md`).
+  - Six CPU ops, with goldens per stage, run through the planned `Executor`.
+  - Allocation-free across routing changes.
+  - `bench_moe` measures naive vs grouped.
+  - Decisions are in `docs/ENGINEERING_DECISIONS.md`.
+- **1B: GPU study on a T4.**
+  - Variants V0 / V0-oracle / V1 / V2 and hypotheses H1–H5.
+  - Measured-only results.
+  - Each GPU variant and each hypothesis verdict needs approval before it lands.

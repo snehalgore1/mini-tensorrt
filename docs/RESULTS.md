@@ -539,3 +539,55 @@ file's `value_info`, populated by `onnx.shape_inference.infer_shapes` at export,
 static-shape invariant). Measured by `OnnxFrontend.*` (built only when `MTRT_ONNX=ON`).
 Conv/pooling operators and a CNN remain out of scope — the frontend-agnostic claim is proven
 without them.
+
+---
+
+## GPT-OSS MoE layer on CPU (MoE track, Milestone 1A)
+
+- **What was run.** One GPT-OSS MoE layer at real gpt-oss-20b MoE dims (H = I = 2880, E = 32,
+  k = 4), FP32, Release build, on the machine above (M1 Pro: 6 performance + 2 efficiency
+  cores, 16 GB).
+- **Command.** `./build/benchmarks/bench_moe --routing both --csv docs/moe/data/bench_moe_cpu.csv`
+- **Iterations.** 20 / 10 / 5 timed iterations for T ≤ 16 / 64 / 256, after 2 warm-up runs.
+- **Weights.** Random (fan-in scaled). Speed does not depend on the values, and correctness is
+  covered by `tests/moe_test.cpp`.
+- **Repeats.** One session. Re-run before quoting tight differences; for example, uniform T = 16
+  has p95 1076 ms against p50 682 ms.
+
+**Grouped vs naive expert section** (same inputs, same `gemm_auto`; the only difference is
+whether an expert's rows are batched into one GEMM). U = distinct experts touched.
+
+| Routing | T | U | Layer p50 (ms) | Grouped p50 (ms) | Naive p50 (ms) | Speedup | Derived GFLOP/s (grouped) | Derived weight GB/s |
+|---|---|---|---|---|---|---|---|---|
+| uniform | 1 | 4 | 71.1 | 71.1 | 71.4 | 1.00× | 2.8 | 5.6 |
+| uniform | 4 | 13 | 248.4 | 257.9 | 311.3 | 1.21× | 3.1 | 5.0 |
+| uniform | 16 | 30 | 682.5 | 701.3 | 1410.8 | 2.01× | 4.5 | 4.3 |
+| uniform | 64 | 32 | 716.1 | 752.5 | 5213.0 | 6.93× | 16.9 | 4.2 |
+| uniform | 256 | 32 | 1048.7 | 1162.9 | 21572.1 | 18.55× | 43.8 | 2.7 |
+| same4 | 1 | 4 | 78.5 | 79.9 | 79.9 | 1.00× | 2.5 | 5.0 |
+| same4 | 4 | 4 | 77.7 | 78.8 | 312.1 | 3.96× | 10.1 | 5.1 |
+| same4 | 16 | 4 | 101.5 | 101.6 | 1265.2 | 12.46× | 31.4 | 3.9 |
+| same4 | 64 | 4 | 146.8 | 141.8 | 5035.7 | 35.52× | 89.9 | 2.8 |
+| same4 | 256 | 4 | 231.2 | 252.0 | 19933.6 | 79.09× | 202.2 | 1.6 |
+
+- **Derived columns.** These are measured times divided by formula quantities:
+  - FLOPs = 6·T·k·H·I.
+  - Weight bytes = U × 99.6 MB.
+  - The weight-bandwidth number assumes each touched weight is read once. It is not a
+    hardware-counter measurement.
+- **Accuracy.** Grouped and naive outputs are **bitwise identical** in every row
+  (max abs error 0).
+- **Per-op profile.** `MoEGroupedMatMul` is ≥ 96% of layer time at every point. Everything else
+  (RMSNorm, router, top-k, dispatch, SwiGLU, combine) totals < 10 ms even at T = 256.
+
+**Memory planning** (from `Executor::memory_stats()`, the same for both routings):
+
+| T | Sum of intermediates (MB) | Planned arena (MB) | Saved |
+|---|---|---|---|
+| 1 | 0.25 | 0.14 | 46% |
+| 16 | 4.06 | 2.21 | 46% |
+| 64 | 16.24 | 8.85 | 46% |
+| 256 | 64.96 | 35.40 | 46% |
+
+The arena peak equals `h[T·k, 2I] + a[T·k, I]`, the two tensors live together at SwiGLU:
+23.6 + 11.8 = 35.4 MB at T = 256. The 3.19 GB of weights are bindings, not intermediates.
