@@ -16,5 +16,6 @@ void register_activation_kernels(KernelRegistry& registry);
 void register_fused_kernels(KernelRegistry& registry);
 void register_transformer_kernels(KernelRegistry& registry);
 void register_gpt_kernels(KernelRegistry& registry);
+void register_moe_kernels(KernelRegistry& registry);
 
 }  // namespace mtrt

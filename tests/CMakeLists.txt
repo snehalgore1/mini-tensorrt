@@ -14,7 +14,8 @@ add_executable(mtrt_tests
   const_fold_test.cpp
   transformer_test.cpp
   gpt2_real_test.cpp
-  gemm_test.cpp)
+  gemm_test.cpp
+  moe_test.cpp)
 
 if(MTRT_ONNX)
   target_sources(mtrt_tests PRIVATE onnx_frontend_test.cpp)

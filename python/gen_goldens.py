@@ -10,6 +10,7 @@ Writes: models/goldens/*.npy
 """
 
 import os
+import sys
 
 import numpy as np
 import torch
@@ -168,8 +169,40 @@ def gen_gpt2_model_goldens():
     save("gpt2_output", gpt2_forward(params, x))
 
 
+def save_i32(name, arr):
+    path = os.path.join(GOLDENS_DIR, name + ".npy")
+    np.save(path, np.ascontiguousarray(arr, dtype=np.int32))
+
+
+INDEX_STAGES = {"idx", "src", "inv", "offsets"}
+
+
+def gen_moe_goldens():
+    """Per-stage MoE fixtures from moe_ref (proven equal to the official GPT-OSS MLPBlock in
+    check_official_moe.py). Index tensors are int32 and are compared exactly in C++."""
+    import moe_cases
+
+    for name in moe_cases.CASES:
+        c = moe_cases.build_case(name)
+        pre = f"moe_{name}_"
+        save(pre + "x", c["x"].numpy())
+        for k, v in c["weights"].items():
+            save(pre + k, v.numpy())
+        for k, v in c["stages"].items():
+            (save_i32 if k in INDEX_STAGES else save)(pre + k, v.numpy())
+        off = c["stages"]["offsets"]
+        empty = int((off[1:] == off[:-1]).sum())
+        print(f"  moe_{name}: T={c['T']} H={c['cfg'].hidden} E={c['cfg'].num_experts} "
+              f"k={c['cfg'].top_k} empty_experts={empty} topk_margin={c['margin']:.3f}")
+
+
 def main():
     os.makedirs(GOLDENS_DIR, exist_ok=True)
+    if "--only-moe" in sys.argv:
+        gen_moe_goldens()
+        print(f"wrote MoE golden fixtures to {GOLDENS_DIR}")
+        return
+    gen_moe_goldens()
     gen_op_goldens()
     gen_model_goldens()
     gen_transformer_op_goldens()

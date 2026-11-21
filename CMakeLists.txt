@@ -44,6 +44,7 @@ add_library(mtrt STATIC
   src/ops/kernels_fused.cpp
   src/ops/kernels_transformer.cpp
   src/ops/kernels_gpt.cpp
+  src/ops/kernels_moe.cpp
   src/memory/memory_planner.cpp
   src/optimizer/fusion.cpp
   src/optimizer/const_fold.cpp

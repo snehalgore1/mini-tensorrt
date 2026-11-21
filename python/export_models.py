@@ -321,7 +321,79 @@ def export_gpt2():
           f"({len(blob)} bytes, {n_layers} layers)")
 
 
+def export_moe():
+    """Export one GPT-OSS MoE layer (the "small" golden case) to moe_layer.json + .bin.
+
+    Same topology as tests/support/moe_graph.h (docs/moe/CPU_DESIGN.md §2). Weights are in
+    the runtime (transposed) layout produced by moe_cases.runtime_weights (D-MoE-3), and are
+    the exact tensors the moe_small_* goldens were computed from.
+    """
+    import moe_cases
+
+    c = moe_cases.build_case("small")
+    cfg, T = c["cfg"], c["T"]
+    H, I, E, k = cfg.hidden, cfg.intermediate, cfg.num_experts, cfg.top_k
+    Tk = T * k
+    blob = bytearray()
+    tensors = []
+
+    def t(name, shape, kind, dtype="f32"):
+        d = {"name": name, "dtype": dtype, "shape": list(shape), "kind": kind}
+        if kind == "weight":
+            data = c["weights"][name].numpy().astype("float32").tobytes(order="C")
+            d["offset"], d["nbytes"] = len(blob), len(data)
+            blob.extend(data)
+        tensors.append(d)
+
+    t("x", [T, H], "input")
+    for name, shape in [("norm_scale", [H]), ("gate_wT", [H, E]), ("gate_b", [E]),
+                        ("w1t", [E, H, 2 * I]), ("b1", [E, 2 * I]),
+                        ("w2t", [E, I, H]), ("b2", [E, H])]:
+        t(name, shape, "weight")
+    for name, shape, dt in [("t", [T, H], "f32"), ("z", [T, E], "f32"),
+                            ("logits", [T, E], "f32"), ("w", [T, k], "f32"),
+                            ("idx", [T, k], "i32"), ("t_sorted", [Tk, H], "f32"),
+                            ("src", [Tk], "i32"), ("inv", [Tk], "i32"),
+                            ("offsets", [E + 1], "i32"), ("h", [Tk, 2 * I], "f32"),
+                            ("a", [Tk, I], "f32"), ("y_sorted", [Tk, H], "f32"),
+                            ("moe", [T, H], "f32")]:
+        t(name, shape, "intermediate", dt)
+    t("out", [T, H], "output")
+
+    nodes = [
+        {"op": "RMSNorm", "inputs": ["x", "norm_scale"], "outputs": ["t"],
+         "attrs": {"eps": cfg.rms_eps}},
+        {"op": "MatMul", "inputs": ["t", "gate_wT"], "outputs": ["z"], "attrs": {}},
+        {"op": "Add", "inputs": ["z", "gate_b"], "outputs": ["logits"], "attrs": {}},
+        {"op": "MoETopK", "inputs": ["logits"], "outputs": ["w", "idx"], "attrs": {"k": k}},
+        {"op": "MoEDispatch", "inputs": ["t", "idx"],
+         "outputs": ["t_sorted", "src", "inv", "offsets"], "attrs": {"num_experts": E}},
+        {"op": "MoEGroupedMatMul", "inputs": ["t_sorted", "offsets", "w1t", "b1"],
+         "outputs": ["h"], "attrs": {}},
+        {"op": "SwiGLUInterleaved", "inputs": ["h"], "outputs": ["a"],
+         "attrs": {"alpha": cfg.swiglu_alpha, "limit": cfg.swiglu_limit}},
+        {"op": "MoEGroupedMatMul", "inputs": ["a", "offsets", "w2t", "b2"],
+         "outputs": ["y_sorted"], "attrs": {}},
+        {"op": "MoECombine", "inputs": ["y_sorted", "inv", "w"], "outputs": ["moe"],
+         "attrs": {}},
+        {"op": "Add", "inputs": ["x", "moe"], "outputs": ["out"], "attrs": {}},
+    ]
+    topo = {"name": "moe_layer", "weights_file": "moe_layer.bin", "tensors": tensors,
+            "nodes": nodes, "inputs": ["x"], "outputs": ["out"]}
+    with open(os.path.join(MODELS_DIR, "moe_layer.json"), "w") as f:
+        json.dump(topo, f, indent=2)
+    with open(os.path.join(MODELS_DIR, "moe_layer.bin"), "wb") as f:
+        f.write(blob)
+    print(f"wrote moe_layer.json + moe_layer.bin ({len(blob)} bytes)")
+
+
 if __name__ == "__main__":
+    import sys
+
+    if "--only-moe" in sys.argv:
+        export_moe()
+        sys.exit(0)
     main()
     export_transformer()
     export_gpt2()
+    export_moe()

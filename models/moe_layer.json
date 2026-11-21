@@ -1,0 +1,349 @@
+{
+  "name": "moe_layer",
+  "weights_file": "moe_layer.bin",
+  "tensors": [
+    {
+      "name": "x",
+      "dtype": "f32",
+      "shape": [
+        6,
+        8
+      ],
+      "kind": "input"
+    },
+    {
+      "name": "norm_scale",
+      "dtype": "f32",
+      "shape": [
+        8
+      ],
+      "kind": "weight",
+      "offset": 0,
+      "nbytes": 32
+    },
+    {
+      "name": "gate_wT",
+      "dtype": "f32",
+      "shape": [
+        8,
+        8
+      ],
+      "kind": "weight",
+      "offset": 32,
+      "nbytes": 256
+    },
+    {
+      "name": "gate_b",
+      "dtype": "f32",
+      "shape": [
+        8
+      ],
+      "kind": "weight",
+      "offset": 288,
+      "nbytes": 32
+    },
+    {
+      "name": "w1t",
+      "dtype": "f32",
+      "shape": [
+        8,
+        8,
+        16
+      ],
+      "kind": "weight",
+      "offset": 320,
+      "nbytes": 4096
+    },
+    {
+      "name": "b1",
+      "dtype": "f32",
+      "shape": [
+        8,
+        16
+      ],
+      "kind": "weight",
+      "offset": 4416,
+      "nbytes": 512
+    },
+    {
+      "name": "w2t",
+      "dtype": "f32",
+      "shape": [
+        8,
+        8,
+        8
+      ],
+      "kind": "weight",
+      "offset": 4928,
+      "nbytes": 2048
+    },
+    {
+      "name": "b2",
+      "dtype": "f32",
+      "shape": [
+        8,
+        8
+      ],
+      "kind": "weight",
+      "offset": 6976,
+      "nbytes": 256
+    },
+    {
+      "name": "t",
+      "dtype": "f32",
+      "shape": [
+        6,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "z",
+      "dtype": "f32",
+      "shape": [
+        6,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "logits",
+      "dtype": "f32",
+      "shape": [
+        6,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "w",
+      "dtype": "f32",
+      "shape": [
+        6,
+        4
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "idx",
+      "dtype": "i32",
+      "shape": [
+        6,
+        4
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "t_sorted",
+      "dtype": "f32",
+      "shape": [
+        24,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "src",
+      "dtype": "i32",
+      "shape": [
+        24
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "inv",
+      "dtype": "i32",
+      "shape": [
+        24
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "offsets",
+      "dtype": "i32",
+      "shape": [
+        9
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "h",
+      "dtype": "f32",
+      "shape": [
+        24,
+        16
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "a",
+      "dtype": "f32",
+      "shape": [
+        24,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "y_sorted",
+      "dtype": "f32",
+      "shape": [
+        24,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "moe",
+      "dtype": "f32",
+      "shape": [
+        6,
+        8
+      ],
+      "kind": "intermediate"
+    },
+    {
+      "name": "out",
+      "dtype": "f32",
+      "shape": [
+        6,
+        8
+      ],
+      "kind": "output"
+    }
+  ],
+  "nodes": [
+    {
+      "op": "RMSNorm",
+      "inputs": [
+        "x",
+        "norm_scale"
+      ],
+      "outputs": [
+        "t"
+      ],
+      "attrs": {
+        "eps": 1e-05
+      }
+    },
+    {
+      "op": "MatMul",
+      "inputs": [
+        "t",
+        "gate_wT"
+      ],
+      "outputs": [
+        "z"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "z",
+        "gate_b"
+      ],
+      "outputs": [
+        "logits"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "MoETopK",
+      "inputs": [
+        "logits"
+      ],
+      "outputs": [
+        "w",
+        "idx"
+      ],
+      "attrs": {
+        "k": 4
+      }
+    },
+    {
+      "op": "MoEDispatch",
+      "inputs": [
+        "t",
+        "idx"
+      ],
+      "outputs": [
+        "t_sorted",
+        "src",
+        "inv",
+        "offsets"
+      ],
+      "attrs": {
+        "num_experts": 8
+      }
+    },
+    {
+      "op": "MoEGroupedMatMul",
+      "inputs": [
+        "t_sorted",
+        "offsets",
+        "w1t",
+        "b1"
+      ],
+      "outputs": [
+        "h"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "SwiGLUInterleaved",
+      "inputs": [
+        "h"
+      ],
+      "outputs": [
+        "a"
+      ],
+      "attrs": {
+        "alpha": 1.702,
+        "limit": 7.0
+      }
+    },
+    {
+      "op": "MoEGroupedMatMul",
+      "inputs": [
+        "a",
+        "offsets",
+        "w2t",
+        "b2"
+      ],
+      "outputs": [
+        "y_sorted"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "MoECombine",
+      "inputs": [
+        "y_sorted",
+        "inv",
+        "w"
+      ],
+      "outputs": [
+        "moe"
+      ],
+      "attrs": {}
+    },
+    {
+      "op": "Add",
+      "inputs": [
+        "x",
+        "moe"
+      ],
+      "outputs": [
+        "out"
+      ],
+      "attrs": {}
+    }
+  ],
+  "inputs": [
+    "x"
+  ],
+  "outputs": [
+    "out"
+  ]
+}
