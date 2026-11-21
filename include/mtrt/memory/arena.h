@@ -23,14 +23,19 @@ class Arena {
     }
   }
 
-  // Contiguous view at a byte offset. FP32 only (matches the arena buffer).
+  // Contiguous view of `dtype` at a byte offset. The buffer is untyped storage
+  // (allocated as f32 only for its element count); the view carries the requested
+  // dtype, so int32 intermediates (MoE idx/src/inv/offsets) are tagged kI32, not
+  // reinterpreted as f32. Offsets come from the planner, which aligns every tensor
+  // to kArenaAlignmentBytes (16), a multiple of every dtype's size.
   Tensor view_at(int64_t byte_offset, DType dtype,
                  const std::vector<int64_t>& shape) const {
-    MTRT_ASSERT(dtype == DType::kF32, "arena is FP32 only");
     MTRT_ASSERT(buffer_.defined(), "view_at on an empty arena");
-    const int64_t off_elems =
-        byte_offset / static_cast<int64_t>(dtype_size(dtype));
-    return buffer_.view(shape, contiguous_strides(shape), off_elems);
+    int64_t nbytes_view = static_cast<int64_t>(dtype_size(dtype));
+    for (int64_t d : shape) nbytes_view *= d;
+    MTRT_ASSERT(byte_offset + nbytes_view <= nbytes(), "arena view out of bounds");
+    (void)nbytes_view;
+    return buffer_.view_bytes(dtype, shape, byte_offset);
   }
 
   int64_t nbytes() const {

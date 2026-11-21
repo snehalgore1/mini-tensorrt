@@ -35,6 +35,13 @@ class Tensor {
   Tensor view(std::vector<int64_t> shape, std::vector<int64_t> strides,
               int64_t offset_elems = 0) const;
 
+  // Contiguous view that REINTERPRETS this tensor's bytes as `dtype`, starting
+  // `byte_offset` bytes into its data. Shares storage, never allocates. Used by the
+  // memory arena (one untyped byte buffer) to hand out typed views, e.g. the int32
+  // index intermediates of the MoE layer next to f32 activations. The caller (the
+  // arena) is responsible for bounds; alignment to the new dtype is asserted.
+  Tensor view_bytes(DType dtype, std::vector<int64_t> shape, int64_t byte_offset) const;
+
   // Contiguous reshape sharing storage. Requires *this contiguous and the same
   // element count.
   Tensor reshape(std::vector<int64_t> shape) const;
