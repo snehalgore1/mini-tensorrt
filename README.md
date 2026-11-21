@@ -38,6 +38,47 @@ The quick brown foxes are a great way to get a little bit of a kick out of your 
 (0 / 64 next-token argmax mismatches, max abs error 4.3e-4), and generation is checked
 token-for-token against `transformers`. See [`docs/RESULTS.md`](docs/RESULTS.md).
 
+## It runs a GPT-OSS Mixture-of-Experts layer (data-dependent routing, static shapes)
+
+The runtime also runs one **GPT-OSS MoE layer** at real gpt-oss-20b MoE dimensions (H = I =
+2880, 32 experts, top-4), in FP32 on the CPU. It runs through the same IR, memory planner,
+Executor and tuned GEMM as GPT-2.
+
+- **Faithful to the official model.**
+  - A staged PyTorch reference is checked against a verbatim copy of OpenAI's `MLPBlock`: FP64
+    error **3.2e-16**, FP32 ≤ 7.5e-7 at real dimensions, and identical expert choices in every
+    case.
+  - The C++ operators are golden-tested stage by stage against that reference.
+  - [`docs/moe/SEMANTICS.md`](docs/moe/SEMANTICS.md) documents top-k-then-softmax, interleaved
+    clamped SwiGLU, and the tie rule.
+- **Routing is dynamic, shapes are not.**
+  - Every token picks exactly 4 experts, so all dispatch buffers have the fixed size T·4.
+  - Only the expert boundaries (`offsets`) depend on the data.
+  - Dispatch is a stable counting sort that needs no scratch memory.
+  - Combine is a gather, so there are no atomics and results are bitwise reproducible.
+  - Six new operators, plus reused `MatMul`/`Add`.
+- **Grouped execution, measured.**
+  - Batching each expert's tokens into one GEMM beats one token at a time by **18.6×** at
+    T = 256 with uniform routing, and **79×** when all tokens share 4 experts.
+  - The outputs are bitwise identical to the token-at-a-time version.
+- **Found and fixed two latent runtime bugs.**
+  - The arena tagged int32 intermediates as FP32.
+  - GEMM worker threads could allocate their packing buffers lazily inside `run()` after the
+    routing changed: 17 → 0 allocations.
+  - Running the layer now allocates nothing, verified across routing changes.
+- **Honest about the gap.** At decode sizes the expert GEMMs stream weights at only ~5.6 GB/s
+  (derived). That is the next optimization target, not yet fixed.
+
+```bash
+./build/benchmarks/bench_moe --routing both                     # CPU sweep, T = 1..256
+.venv/bin/python python/check_official_moe.py --real            # vs official GPT-OSS (needs torch)
+```
+
+Design: [`docs/moe/CPU_DESIGN.md`](docs/moe/CPU_DESIGN.md). Decisions and tradeoffs:
+[`docs/ENGINEERING_DECISIONS.md`](docs/ENGINEERING_DECISIONS.md). Numbers:
+[`docs/RESULTS.md`](docs/RESULTS.md#gpt-oss-moe-layer-on-cpu-moe-track-milestone-1a). A GPU
+study (T4) is the next milestone.
+
 ## Quick start
 
 ```bash
@@ -69,6 +110,9 @@ cmake --build build -j && ctest --test-dir build -R Onnx --output-on-failure
   bit-for-bit)
 - Runs **real GPT-2-small (124M)** end to end — token/positional embeddings, 12 pre-LN
   transformer layers, causal multi-head attention, LM head — validated against HuggingFace
+- Runs a **GPT-OSS Mixture-of-Experts layer** (top-4 of 32 experts, real 20B dims) with
+  data-dependent routing inside the static-shape runtime, validated against the official
+  GPT-OSS code
 - Also runs an MLP and a multi-head transformer block, validated against PyTorch
 - Plans tensor lifetimes and packs intermediates into a single reused arena
 - Rewrites the graph with fusion and constant-folding passes, verified numerically equivalent
