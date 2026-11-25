@@ -202,7 +202,7 @@ formula).
 
 ---
 
-## Milestone 1B: GPU study (Kaggle T4)
+## Milestone 1B: GPU study (T4: Colab or Kaggle)
 
 ### D-MoE-15 · Router logits must be finite (a precondition)
 - **Problem.** With a NaN logit, the CPU top-k's strict `>` comparisons all return false, so
@@ -237,7 +237,7 @@ Approved at Checkpoint 3 ([moe/GPU_DISPATCH_DESIGN.md](moe/GPU_DISPATCH_DESIGN.m
   - legacy-default-stream work: the stream is created with `cudaStreamNonBlocking`, and cuBLAS
     is bound to it with `cublasSetStream`
   - cuBLAS allocation: it gets a fixed 32 MB `cublasSetWorkspace` at setup
-- **Evidence level.** Code audit only so far. nsys may add to it if Kaggle allows profiling.
+- **Evidence level.** Code audit only so far. nsys may add to it if the platform allows profiling.
   `cudaStreamQuery` is not used as evidence.
 
 ### D-MoE-18 · How V0-oracle and forced routing are defined
@@ -263,4 +263,17 @@ Approved at Checkpoint 3 ([moe/GPU_DISPATCH_DESIGN.md](moe/GPU_DISPATCH_DESIGN.m
   - It catches syntax, type, overload and undeclared-name errors.
   - It was checked against two planted errors, both caught.
 - **Limits.** It proves nothing about runtime behaviour. Correctness comes from `moe_cuda_test`
-  on the T4, and timing from `bench_moe_cuda`, both run from `kaggle/README.md`.
+  on the T4, and timing from `bench_moe_cuda`, both run from `colab/README.md` ("MoE study") or `kaggle/README.md`.
+
+### D-MoE-20 · Colab is an equivalent T4 platform for the study
+- **What changed.** The plan named a Kaggle T4 ×2, using GPU 0 only. Colab gives one T4
+  (sm_75) per VM, which is the same GPU model.
+- **Why it doesn't change the study.** It uses a single GPU anyway, and every comparison
+  (V0 vs V0-oracle, later V1 vs V2) is made **within one session**. A different VM host only
+  shifts absolute numbers between sessions, which the plan already handles by comparing
+  conclusions, not timings, across sessions.
+- **What gets recorded.** Each pasted run records the platform, driver, CUDA version and the
+  observed clocks.
+- **Colab-specific limits.** Free-tier host RAM is about 12–13 GB, and the benchmark peaks at
+  about 6.5 GB on the host. The CPU cross-check is slower (2 x86 cores). Sessions can
+  disconnect.

@@ -150,7 +150,7 @@ pass 2  cursor = 0
   It is the only entry on V0's list, and it is what V0 vs V0-oracle measures.
 - **Evidence, strongest first:**
   1. a code audit of each run path, recorded in the decisions log
-  2. nsys, if Kaggle permits profiling
+  2. nsys, if the platform permits profiling
   3. CUDA-Graph capture of V1 (optional (b)); capture fails on any synchronizing call
 - `cudaStreamQuery` is not treated as evidence.
 
@@ -203,7 +203,7 @@ All of these are allocated once, before any timed region.
    - Not a hypothesis by itself.
    - Option C is timed only if D shows up as a measurable fraction of the layer.
 
-These run on Kaggle; I don't have a GPU here. I'll prepare the notebook steps, you run them and
+These run on a T4 (Colab or Kaggle); I don't have a GPU here. I'll prepare the notebook steps, you run them and
 paste the outputs, and only those outputs go into the docs.
 
 ## 9. Open questions for the reviewer

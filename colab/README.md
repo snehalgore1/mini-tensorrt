@@ -80,3 +80,72 @@ FP16-vs-FP32 accuracy delta. Expected shape of the result: cuBLAS FP16 (tensor c
 large multiple of cuBLAS FP32 on the T4 (~65 vs ~8 TFLOP/s peak), and our WMMA kernel lands
 some fraction of cuBLAS FP16 — the "textbook tensor-core kernel vs tuned library" story,
 the FP16 analogue of the NEON-vs-Accelerate and tiled-vs-cuBLAS gaps already in the repo.
+
+---
+
+## MoE study, Milestone 1B (GPT-OSS MoE layer: V0 vs V0-oracle, H1)
+
+This is the same GPU as the Kaggle runbook (`kaggle/README.md`): a Tesla T4, sm_75, with one GPU
+per Colab VM. Either platform is fine; just record which one you used. Compare timings only
+**within one session**. The plan's second session can be another Colab session on a different
+day. Paste every output block back; only pasted outputs go into the docs.
+
+**Runtime → Change runtime type → T4 GPU.** Then run one cell per block:
+
+```bash
+# 1. Environment record
+!nvidia-smi
+!nvidia-smi --query-gpu=name,driver_version,clocks.sm,clocks.max.sm,clocks.mem,temperature.gpu,power.draw,power.limit --format=csv
+!nvcc --version | tail -2
+!cmake --version | head -1
+!nproc; free -g | head -2
+```
+
+```bash
+# 2. Clone the MoE branch and build only the MoE GPU targets
+%cd /content
+!rm -rf mini-tensorrt
+!git clone --branch feature/moe https://github.com/snehalgore1/mini-tensorrt.git
+%cd mini-tensorrt
+!git log --oneline -1
+!cmake -B build -DCMAKE_BUILD_TYPE=Release -DMTRT_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=75 > /dev/null
+!cmake --build build -j2 --target moe_cuda_test bench_moe_cuda 2>&1 | tail -5
+```
+
+```bash
+# 3. Correctness: must end with "[MOE-CUDA] N passed, 0 failed -> all passed"
+!./build/backends/cuda/moe_cuda_test
+```
+
+```bash
+# Sanitizers (slower). If not on PATH, use /usr/local/cuda/bin/compute-sanitizer.
+!compute-sanitizer --tool memcheck  ./build/backends/cuda/moe_cuda_test | tail -3
+!compute-sanitizer --tool racecheck ./build/backends/cuda/moe_cuda_test | tail -3
+!compute-sanitizer --tool synccheck ./build/backends/cuda/moe_cuda_test | tail -3
+```
+
+```bash
+# 4a. Smoke benchmark (a few seconds)
+!./build/backends/cuda/bench_moe_cuda --T 1,64 --iters 20 --warmup 5
+```
+
+```bash
+# 4b. Full sweep + stage breakdown, with clocks before and after (several minutes)
+!nvidia-smi --query-gpu=clocks.sm,clocks.mem,temperature.gpu,power.draw --format=csv,noheader
+!./build/backends/cuda/bench_moe_cuda --stages --sha $(git rev-parse --short HEAD) --csv /content/bench_moe_cuda_v0.csv
+!nvidia-smi --query-gpu=clocks.sm,clocks.mem,temperature.gpu,power.draw --format=csv,noheader
+!cat /content/bench_moe_cuda_v0.csv
+```
+
+**Colab-specific notes:**
+- **Host RAM.** The benchmark keeps about 3.2 GB of weights in host RAM, plus a second copy
+  while it builds the CPU cross-check for T ≤ 64. That is about 6.5 GB at peak. The free tier
+  has about 12–13 GB, which is enough. If the session runs out of memory anyway, add
+  `--check-max-T 16`.
+- **Slow CPU cross-check.** Colab's CPU is 2 x86 cores running the scalar fallback GEMM, so
+  that check (T ≤ 64) takes tens of seconds per row. The GPU timing does not depend on it.
+- **Disconnects.** Free sessions can disconnect when idle. Keep the tab active during 4b.
+  `/content` is wiped on disconnect, so copy the CSV out (`cat` it, or download it) before
+  closing.
+- **Clocks.** You cannot lock clocks on Colab either. The `nvidia-smi` lines record what you
+  observed.

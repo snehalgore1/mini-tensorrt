@@ -1,5 +1,8 @@
 # Running the MoE GPU study on Kaggle (Milestone 1B)
 
+> The same steps for **Google Colab** are in [`colab/README.md`](../colab/README.md) under
+> "MoE study". Both platforms use a T4; use whichever is available.
+
 The GPU work is developed without a local GPU. The CUDA sources are type-checked on the Mac
 (`tools/cuda_syntax_check/check.sh`), but they are **built, tested and timed only here**, on a
 Kaggle T4. Paste every output block back; only pasted outputs go into the docs.

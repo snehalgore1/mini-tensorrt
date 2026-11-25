@@ -46,7 +46,7 @@ The verdict is added only after the measured outputs are pasted. It is presented
   - A refuted H1 is a real result: "for a 20B-dim MoE layer on a T4, removing the host sync is
     not where the time is."
 
-**Verdict:** pending. The data comes from the Kaggle run in `kaggle/README.md` §4.
+**Verdict:** pending. The data comes from the T4 run in `colab/README.md` ("MoE study" §4) or, equivalently, `kaggle/README.md` §4.
 
 ## H2–H5
 
