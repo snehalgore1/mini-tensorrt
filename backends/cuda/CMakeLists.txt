@@ -15,7 +15,8 @@ add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets>)
 # dispatches graph nodes to the kernels). Links the CPU core (mtrt) for the Graph
 # IR / model loader it reuses.
 add_library(mtrt_cuda STATIC
-  kernels.cu gemm_cuda.cu flash_attention.cu gemm_fp16.cu cuda_executor.cpp)
+  kernels.cu gemm_cuda.cu flash_attention.cu gemm_fp16.cu cuda_executor.cpp
+  moe.cu moe_layer.cpp)
 target_include_directories(mtrt_cuda PUBLIC
   ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR})
 target_link_libraries(mtrt_cuda PUBLIC CUDA::cudart CUDA::cublas mtrt)
@@ -50,3 +51,15 @@ target_link_libraries(bench_gemm_cuda PRIVATE mtrt_cuda)
 add_executable(bench_gemm_fp16 bench_gemm_fp16.cu)
 target_include_directories(bench_gemm_fp16 PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(bench_gemm_fp16 PRIVATE mtrt_cuda)
+
+# MoE track, Milestone 1B: GPU MoE tests (goldens, exact vs the CPU kernels, V0 / V0-oracle).
+add_executable(moe_cuda_test moe_cuda_test.cu)
+target_include_directories(moe_cuda_test PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(moe_cuda_test PRIVATE mtrt_cuda)
+target_compile_definitions(moe_cuda_test PRIVATE
+  MTRT_GOLDENS_DIR="${CMAKE_SOURCE_DIR}/models/goldens")
+
+# MoE track, Milestone 1B: layer benchmark at real gpt-oss-20b dims (V0 vs V0-oracle so far).
+add_executable(bench_moe_cuda bench_moe_cuda.cu)
+target_include_directories(bench_moe_cuda PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(bench_moe_cuda PRIVATE mtrt_cuda)

@@ -199,3 +199,68 @@ formula).
   - It rises to 18.6× (uniform, about 32 rows per expert) and 79× (same4, 256 rows per
     expert) at T = 256.
   - The two paths are bitwise identical.
+
+---
+
+## Milestone 1B: GPU study (Kaggle T4)
+
+### D-MoE-15 · Router logits must be finite (a precondition)
+- **Problem.** With a NaN logit, the CPU top-k's strict `>` comparisons all return false, so
+  the result depends on where the NaN sits. `torch.topk` instead ranks NaN first.
+- **Decision.** Approved at Checkpoint 3. Finite logits are a precondition of the MoE layer.
+  - The CPU kernel Debug-asserts `std::isfinite`.
+  - GPU behaviour on NaN is documented as unspecified.
+- **Rejected.** Inventing a third NaN rule, or defining NaN = −∞ on both sides.
+
+### D-MoE-16 · GPU dispatch: rank by counting, one block per expert
+Approved at Checkpoint 3 ([moe/GPU_DISPATCH_DESIGN.md](moe/GPU_DISPATCH_DESIGN.md)).
+- **How it works.** Block e computes `offsets[e] = #{a : idx[a] < e}`, then runs a stable ballot
+  compaction to fill `src`/`inv`.
+- **Properties.** One launch, no atomics, no workspace, no inter-block communication. Each block
+  writes a disjoint set of slots.
+- **Why the CPU is an exact oracle.** A stable sort has a unique output, so the CPU kernel's
+  results can be compared with `==`.
+- **Cost.** O(E·Tk), tiny for E = 32.
+- **Fallback.** CUB radix sort produces identical output.
+- **Verified by:** `python/sim_gpu_dispatch.py` (warp-level simulation, 26,568 routings), and on
+  the GPU by `moe_cuda_test`, which checks exactly against the CPU kernel on 48 random routings
+  with poisoned outputs.
+
+### D-MoE-17 · Sync audit of the V0 / V0-oracle run path (`MoELayerCuda::enqueue`)
+- **V0.** Kernel launches and cuBLAS calls are async on one non-blocking stream. There is
+  exactly **one** `cudaMemcpyAsync` D2H (`offsets`, 132 B, into pinned memory) and **one**
+  `cudaStreamSynchronize`.
+- **V0-oracle.** Kernel launches and cuBLAS calls only. No copy, no sync.
+- **Neither path contains:**
+  - `cudaMalloc`/`cudaFree`
+  - a synchronous `cudaMemcpy`
+  - legacy-default-stream work: the stream is created with `cudaStreamNonBlocking`, and cuBLAS
+    is bound to it with `cublasSetStream`
+  - cuBLAS allocation: it gets a fixed 32 MB `cublasSetWorkspace` at setup
+- **Evidence level.** Code audit only so far. nsys may add to it if Kaggle allows profiling.
+  `cudaStreamQuery` is not used as evidence.
+
+### D-MoE-18 · How V0-oracle and forced routing are defined
+- **V0-oracle.** It reuses V0's offsets, copied by `prepare_oracle()` **outside** the timed
+  region. The kernels and the cuBLAS calls are identical, in the same order.
+  - Δ = V0 − V0-oracle is therefore the cost of making the routing host-visible: the D2H copy,
+    the sync, and the GPU idling until the host issues the next GEMM.
+  - It is a measuring device, not a deployable path. It aborts if used after the routing
+    changed.
+- **Forced routing.** Synthetic `(idx, w)` from one generator (uniform / Zipf s=1.2 / same4) is
+  uploaded once.
+  - **The router and top-k still run every iteration**, so their cost stays in the
+    measurement.
+  - Only dispatch, bias and combine read the forced buffers.
+  - Every variant therefore sees identical expert segments.
+- **Checked by:** `moe_cuda_test` asserts that forced routing equal to the golden routing
+  reproduces the golden output.
+
+### D-MoE-19 · CUDA code is type-checked locally and built/run only on the GPU machine
+- **Constraint.** There is no `nvcc` on the development Mac.
+- **Tool.** `tools/cuda_syntax_check/check.sh` runs clang's CUDA frontend (host pass, plus a
+  device pass for sm_75) against minimal stub headers.
+  - It catches syntax, type, overload and undeclared-name errors.
+  - It was checked against two planted errors, both caught.
+- **Limits.** It proves nothing about runtime behaviour. Correctness comes from `moe_cuda_test`
+  on the T4, and timing from `bench_moe_cuda`, both run from `kaggle/README.md`.
