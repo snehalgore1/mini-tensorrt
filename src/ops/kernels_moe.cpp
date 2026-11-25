@@ -88,6 +88,10 @@ void moe_topk_f32(const OpContext& ctx) {
     int64_t n = 0;  // filled entries, val[0..n) descending
     for (int64_t e = 0; e < E; ++e) {
       const float v = row[e];
+      // Precondition (Checkpoint 3 decision, D-MoE-15): router logits are finite. With a NaN
+      // the strict-> comparisons are all false, so the result would depend on position;
+      // torch.topk instead ranks NaN first. We do not invent a third rule.
+      MTRT_ASSERT(std::isfinite(v), "MoETopK: router logits must be finite");
       if (n == k && !(v > val[k - 1])) continue;  // not strictly better than the k-th
       int64_t p = (n < k) ? n : k - 1;            // slot to fill (drops the k-th if full)
       while (p > 0 && v > val[p - 1]) {           // strict: equal values keep their order
